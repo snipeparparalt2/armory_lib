@@ -1,20 +1,22 @@
 # Read by the Horizon mod registry from the newest release's tag. Entries set in the registry win.
 name = "Armory Lib"
-summary = "Library for native mods: custom mob looks and rules, effects from carried items, coloured gear light and settings pages."
+summary = "Lets content mods add coloured gear light, set bonuses, tool abilities, weapon effects and custom mob looks with no code."
 description = """
-A native library mod. It does nothing on its own: install it when a mod you use asks for it
-(Useful Armory does).
+A native library mod. It does nothing on its own: it adds the parts of other mods that need
+code. Install it when a mod you use offers extras with it (Useful Armory does).
 
-For mod authors, it turns a few lines of registration into working features, using only Horizon's
-catalog hooks:
+Content mods declare what they want in one file, data/<mod id>/armory_lib.json, and stay a single
+.hmod that installs from the mod browser:
 
-- Mob looks: draw a mod entity type with its own texture and glowing layer on a vanilla body.
-- Mob rules: stop a copied mob converting or dying from burning, and give its hits an effect.
-- Carried-item effects: an effect while an item is held, in the hotbar, worn, or worn as a full set.
 - Coloured gear light: items that light the world in their colour, held, worn or dropped.
-- Settings pages: a row in Options > Mods with one switch per feature.
+- Armour set bonuses, sneak abilities (vein mining, 3x3 digging, tree felling), harvest sweeps
+  and weapon effects (backstab, splash, fire, healing, bonus damage, head drops).
+- Mob looks and rules: a mod creature drawn with its own texture and glowing layer, kept from
+  converting or burning in daylight, with effects on its hits.
+- Effects from carried items, and a settings page in Options > Mods with a switch per feature.
 
-One file: armory_lib-<version>.hnmod goes in horizon-native-mods/.
+Native mods can call the same features from Rust. One file: armory_lib-<version>.hnmod goes in
+horizon-native-mods/, then Build.
 """
 authors = ["snipeparpar"]
 license = "MPL-2.0"

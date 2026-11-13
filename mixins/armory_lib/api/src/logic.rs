@@ -537,6 +537,164 @@ pub fn lapsed(before: &[(String, u8)], now: &[(String, u8)]) -> Vec<String> {
         .collect()
 }
 
+// ---------------------------------------------------------------------------------------
+// A mod's file: `data/<mod id>/armory_lib.json`
+// ---------------------------------------------------------------------------------------
+
+/// The newest `schema` this version reads.
+pub const FILE_SCHEMA: u64 = 1;
+
+/// What a mod's file declares for this package (its gear rules are read by the bridge).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Declared {
+    /// False for a file of a newer schema: nothing of it is used.
+    pub usable: bool,
+    pub page: Option<Page>,
+    pub lights: Vec<GearLight>,
+    pub looks: Vec<MobLook>,
+    pub rules: Vec<MobRules>,
+    pub carried: Vec<CarriedEffect>,
+    /// What could not be used, one line each, for the log.
+    pub problems: Vec<String>,
+}
+
+fn list<'a>(file: &'a serde_json::Value, key: &str) -> impl Iterator<Item = &'a serde_json::Value> {
+    file.get(key).and_then(|v| v.as_array()).into_iter().flatten()
+}
+
+fn text(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|v| v.as_str()).map(str::to_owned)
+}
+
+fn texts(value: &serde_json::Value, key: &str) -> Vec<String> {
+    list(value, key).filter_map(|v| v.as_str().map(str::to_owned)).collect()
+}
+
+fn flag(value: &serde_json::Value, key: &str) -> bool {
+    value.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// `"#8cffe2"`, `"8cffe2"` or the number 0x8cffe2.
+pub fn colour(value: Option<&serde_json::Value>) -> Option<u32> {
+    match value? {
+        serde_json::Value::String(s) => {
+            let hex = s.strip_prefix('#').unwrap_or(s);
+            (hex.len() == 6).then(|| u32::from_str_radix(hex, 16).ok()).flatten()
+        }
+        other => other.as_u64().filter(|n| *n <= 0xff_ffff).map(|n| n as u32),
+    }
+}
+
+/// Reads mod `mod_id`'s file.
+pub fn read_file(mod_id: &str, file: &serde_json::Value) -> Declared {
+    let mut out = Declared::default();
+    let schema = file.get("schema").and_then(|v| v.as_u64()).unwrap_or(1);
+    if !file.is_object() || schema > FILE_SCHEMA {
+        out.problems.push(format!(
+            "{mod_id}: armory_lib.json has schema {schema}, this Armory Lib reads up to {FILE_SCHEMA}"
+        ));
+        return out;
+    }
+    out.usable = true;
+    if let Some(page) = file.get("page") {
+        out.page = Some(Page {
+            mod_id: mod_id.to_owned(),
+            title: text(page, "title").unwrap_or_else(|| mod_id.to_owned()),
+            description: text(page, "description").unwrap_or_default(),
+            switches: list(page, "switches")
+                .filter_map(|s| {
+                    let key = text(s, "key")?;
+                    let label = text(s, "label").unwrap_or_else(|| key.clone());
+                    Some(Switch::new(&key, &label))
+                })
+                .collect(),
+        });
+    }
+    for light in list(file, "gear_lights") {
+        let Some(rgb) = colour(light.get("color")) else {
+            out.problems.push(format!("{mod_id}: a gear_lights entry has no usable color"));
+            continue;
+        };
+        let level = light.get("level").and_then(|v| v.as_f64()).unwrap_or(1.0).clamp(0.0, 1.0);
+        for item in texts(light, "items") {
+            out.lights.push(GearLight {
+                mod_id: mod_id.to_owned(),
+                setting: text(light, "setting"),
+                item,
+                rgb,
+                level: level as f32,
+            });
+        }
+    }
+    for look in list(file, "mob_looks") {
+        let (Some(kind), Some(texture)) = (text(look, "kind"), text(look, "texture")) else {
+            out.problems.push(format!("{mod_id}: a mob_looks entry needs kind and texture"));
+            continue;
+        };
+        let rig = match look.get("rig").and_then(|v| v.as_str()).unwrap_or("zombie") {
+            "zombie" => Rig::zombie(),
+            "humanoid" => Rig::humanoid(),
+            "wolf" => Rig::wolf(),
+            "chicken" => Rig::chicken(),
+            other => {
+                out.problems.push(format!("{mod_id}: unknown rig {other:?} for {kind}"));
+                continue;
+            }
+        };
+        let mut made = MobLook::new(mod_id, &kind, rig, &texture);
+        made.emissive = text(look, "emissive");
+        made.scale = look.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0).clamp(0.1, 8.0) as f32;
+        out.looks.push(made);
+    }
+    for rule in list(file, "mob_rules") {
+        let Some(kind) = text(rule, "kind") else {
+            out.problems.push(format!("{mod_id}: a mob_rules entry needs kind"));
+            continue;
+        };
+        let mut made = MobRules::new(mod_id, &kind);
+        made.no_conversion = flag(rule, "no_conversion");
+        made.no_sunburn = flag(rule, "no_sunburn");
+        made.fire_proof = flag(rule, "fire_proof");
+        for hit in list(rule, "on_hit") {
+            let Some(effect) = text(hit, "effect") else {
+                continue;
+            };
+            made.on_hit.push(HitEffect {
+                effect,
+                amplifier: hit.get("amplifier").and_then(|v| v.as_u64()).unwrap_or(0).min(255) as u8,
+                duration: hit.get("ticks").and_then(|v| v.as_i64()).unwrap_or(100).clamp(1, 72000) as i32,
+            });
+        }
+        out.rules.push(made);
+    }
+    for carried in list(file, "carried_effects") {
+        let place = match carried.get("place").and_then(|v| v.as_str()).unwrap_or("hotbar") {
+            "main_hand" => Place::MainHand,
+            "off_hand" => Place::OffHand,
+            "hotbar" => Place::Hotbar,
+            "worn" => Place::Worn,
+            "all_worn" => Place::AllWorn,
+            other => {
+                out.problems.push(format!("{mod_id}: unknown place {other:?}"));
+                continue;
+            }
+        };
+        let Some(effect) = text(carried, "effect") else {
+            out.problems.push(format!("{mod_id}: a carried_effects entry needs effect"));
+            continue;
+        };
+        out.carried.push(CarriedEffect {
+            mod_id: mod_id.to_owned(),
+            setting: text(carried, "setting"),
+            items: texts(carried, "items"),
+            place,
+            effect,
+            amplifier: carried.get("amplifier").and_then(|v| v.as_u64()).unwrap_or(0).min(255) as u8,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,5 +855,76 @@ mod tests {
         assert_eq!(lapsed(&now, &later), vec!["minecraft:speed".to_string()]);
         assert!(lapsed(&later, &now).is_empty());
         assert!(EFFECT_TICKS > REFRESH_TICKS as i32 * 2);
+    }
+
+    #[test]
+    fn a_mods_file_is_read() {
+        let file = serde_json::json!({
+            "schema": 1,
+            "page": {"title": "My Mod 1.0", "description": "d", "switches": [{"key": "glow", "label": "Glow"}, {"key": "x"}]},
+            "gear_lights": [
+                {"items": ["m:a", "m:b"], "color": "#8cffe2", "setting": "glow"},
+                {"items": ["m:c"], "color": 255, "level": 0.5},
+                {"items": ["m:d"], "color": "blue"}
+            ],
+            "mob_looks": [
+                {"kind": "m:shade", "texture": "m:entity/shade", "emissive": "m:entity/shade_e"},
+                {"kind": "m:dog", "rig": "wolf", "texture": "m:entity/dog", "scale": 1.5},
+                {"kind": "m:odd", "rig": "spider", "texture": "m:entity/odd"},
+                {"kind": "m:none"}
+            ],
+            "mob_rules": [
+                {"kind": "m:shade", "no_conversion": true, "no_sunburn": true,
+                 "on_hit": [{"effect": "minecraft:slowness", "amplifier": 1, "ticks": 100}]}
+            ],
+            "carried_effects": [
+                {"items": ["m:ring"], "place": "hotbar", "effect": "minecraft:speed"},
+                {"items": ["m:h", "m:c", "m:l", "m:b"], "place": "all_worn", "effect": "minecraft:haste", "amplifier": 1},
+                {"items": ["m:ring"], "place": "pocket", "effect": "minecraft:speed"}
+            ],
+            "tools": [{"items": ["m:pick"], "ability": "vein_mine"}]
+        });
+        let d = read_file("m", &file);
+        assert!(d.usable);
+        assert_eq!(d.problems.len(), 4, "{:?}", d.problems);
+        let page = d.page.unwrap();
+        assert_eq!((page.mod_id.as_str(), page.title.as_str(), page.switches.len()), ("m", "My Mod 1.0", 2));
+        assert_eq!(page.switches[1].label, "x");
+        assert_eq!(d.lights.len(), 3);
+        assert_eq!((d.lights[0].rgb, d.lights[0].setting.as_deref()), (0x8cffe2, Some("glow")));
+        assert_eq!((d.lights[2].rgb, d.lights[2].level), (255, 0.5));
+        assert_eq!(d.looks.len(), 2);
+        assert_eq!(d.looks[0].emissive.as_deref(), Some("m:entity/shade_e"));
+        assert_eq!((d.looks[1].rig.layer.as_str(), d.looks[1].scale), ("minecraft:wolf#main", 1.5));
+        assert!(d.rules[0].no_conversion && d.rules[0].no_sunburn && !d.rules[0].fire_proof);
+        assert_eq!(d.rules[0].on_hit[0], HitEffect { effect: "minecraft:slowness".into(), amplifier: 1, duration: 100 });
+        assert_eq!(d.carried.len(), 2);
+        assert_eq!((d.carried[1].place, d.carried[1].amplifier), (Place::AllWorn, 1));
+    }
+
+    #[test]
+    fn a_newer_or_broken_file_is_left_alone() {
+        let newer = read_file("m", &serde_json::json!({"schema": 2, "gear_lights": []}));
+        assert!(!newer.usable && newer.problems.len() == 1);
+        assert!(!read_file("m", &serde_json::json!([1, 2])).usable);
+        let empty = read_file("m", &serde_json::json!({}));
+        assert!(empty.usable && empty.page.is_none() && empty.problems.is_empty());
+        assert_eq!(colour(Some(&serde_json::json!("8cffe2"))), Some(0x8cffe2));
+        assert_eq!(colour(Some(&serde_json::json!("#fff"))), None);
+        assert_eq!(colour(Some(&serde_json::json!(0x1000000))), None);
+        assert_eq!(colour(None), None);
+    }
+
+    /// For mod authors: `ARMORY_LIB_FILE=<path to armory_lib.json> cargo test checks_a_mods_file`
+    /// fails with what the library could not use of the file's page, lights, looks, rules and carried effects.
+    #[test]
+    fn checks_a_mods_file() {
+        let Ok(path) = std::env::var("ARMORY_LIB_FILE") else {
+            return;
+        };
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let file: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let problems = read_file("mod", &file).problems;
+        assert!(problems.is_empty(), "{problems:#?}");
     }
 }

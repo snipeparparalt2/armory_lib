@@ -9,3 +9,11 @@ license = "MPL-2.0"
 
 [lib]
 path = "mixins/armory_lib/api/src/logic.rs"
+
+# The half added to the game's client library: gear rules and their logic.
+[[test]]
+name = "bridge"
+path = "mixins/armory_lib/bridge.rs"
+
+[dependencies]
+serde_json = "1"

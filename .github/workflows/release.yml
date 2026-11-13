@@ -52,7 +52,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files=$(ls dist/*.hmod dist/*.hnmod dist/*.minisig dist/SHA256SUMS.txt 2>/dev/null)
+          shopt -s nullglob
+          files="$(echo dist/*.hmod dist/*.hnmod dist/*.minisig dist/SHA256SUMS.txt)"
+          [ -n "$files" ] || { echo "nothing in dist/ to attach"; exit 1; }
           [ -f minisign.pub ] && files="$files minisign.pub"
           flags=""
           notes="Armory Lib ${GITHUB_REF_NAME#v} for Horizon fdc87ae (Nightly 2026-11-08, game data 26.3)."

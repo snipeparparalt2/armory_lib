@@ -1,7 +1,9 @@
 # Armory Lib: a native library mod (Horizon docs/native-mods.md, "Trait mods" and
-# "Dependencies between trait mods"). Everything is in the `[api]` package, which the
-# launcher links into the game. Other mods name it under `[dependencies]` in their own
-# horizon-mixin.toml and call its public functions.
+# "Dependencies between trait mods"). It carries out what content mods declare in their
+# `data/<mod id>/armory_lib.json`, so they need no code of their own. Native mods can also
+# name it under `[dependencies]` in their horizon-mixin.toml and call its public functions.
+# The `[api]` package is linked beside the game; the modules and injections below are its
+# mixin half.
 [mod]
 id = "armory_lib"
 version = "0.1.0"
@@ -12,11 +14,12 @@ horizon_revision = "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca"
 [api]
 path = "api"
 
-# The one place no catalog hook reaches: where daylight sets an undead mob alight
-# (vanilla's `Mob.burnUndead`), in the client library crate. `bridge.rs` is added there as
-# the public module `horizon_client::armory_lib_bridge`, which the `[api]` package fills with
-# the entity types to spare; `sunburn.rs` asks it and leaves such a mob unlit. A raw target,
-# so the library is pinned to the Horizon commit above.
+# The mixin half. `bridge.rs` is added to the game's client library as the public module
+# `horizon_client::armory_lib_bridge`: what the `[api]` package and the mixin code share (the
+# gear rules read from the mods' files, their logic, the switches, the daylight list).
+# `gear.rs` runs the gear rules in the game. Its hooks are catalog hook points, but it reads
+# the player's break, the mob list and block facts straight from `Game`, and `sunburn.rs`
+# hooks a raw target, so the library is pinned to the Horizon commit above.
 [[module]]
 id = "bridge"
 file = "crates/horizon-client/src/client_lib.rs"
@@ -24,6 +27,14 @@ name = "armory_lib_bridge"
 source = "bridge.rs"
 visibility = "pub"
 
+[[module]]
+id = "gear"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_gear"
+source = "gear.rs"
+
+# Daylight is about to set an undead mob alight (vanilla's `Mob.burnUndead`): not a type a
+# mod listed with `no_sunburn`.
 [[injection]]
 id = "sunburn"
 target = "horizon_client_lib::mobs::ai::burn_undead"
@@ -31,3 +42,127 @@ kind = "HEAD"
 cancellable = true
 helper = "sunburn.rs"
 bindings = [{ name = "mob", ty = "&crate::mobs::Mob", value = "&*m" }]
+
+# Set bonuses: effects and a set's healing each player tick (with that player
+# swapped in), falls and explosions in the incoming damage, a set's knockback and
+# experience. The player tick also deals weapon splashes.
+[[injection]]
+id = "player_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_player_tick"
+helper = "player_tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "incoming_damage"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v3"
+helper = "incoming_damage.rs"
+bindings = [
+  { name = "victim_uuid", ty = "Option<u128>", value = "victim_uuid" },
+  { name = "damage_type", ty = "&str", value = "damage_type" },
+  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
+  { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },
+]
+
+[[injection]]
+id = "knockback"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_knockback"
+helper = "knockback.rs"
+bindings = [
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
+  { name = "strength", ty = "&mut f64", value = "&mut *strength" },
+]
+
+[[injection]]
+id = "experience"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_player_exp_change"
+helper = "experience.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "player", ty = "u128", value = "player" },
+  { name = "amount", ty = "&mut i32", value = "&mut *amount" },
+]
+
+# Tool abilities: vein mining, wide dig and tree felling where a player's break starts, the
+# harvest sweep where an item's use on a block starts.
+[[injection]]
+id = "destroy_block"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_destroy_block"
+helper = "destroy_block.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "use_item_on"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"
+helper = "use_item_on.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
+
+# Weapon effects: damage bonuses before a player's weapon hit, fire and splashes once it
+# landed, healing and heads on a kill, the heads in the mob's loot.
+[[injection]]
+id = "weapon_hit"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v2"
+helper = "weapon_hit.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
+  { name = "source_position", ty = "Option<[f64; 3]>", value = "source_position" },
+  { name = "victim_position", ty = "[f64; 3]", value = "victim_position" },
+  { name = "victim_view", ty = "[f64; 3]", value = "victim_view" },
+  { name = "weapon", ty = "Option<&horizon_client::items::ItemStack>", value = "weapon" },
+  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "hurt_enemy"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy"
+helper = "hurt_enemy.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "entity", ty = "u32", value = "entity" },
+]
+
+[[injection]]
+id = "mob_killed"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mob_killed"
+helper = "mob_killed.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "u128", value = "player" },
+  { name = "entity", ty = "u32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
+]
+
+[[injection]]
+id = "loot_drops"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_loot_drops"
+helper = "loot_drops.rs"
+bindings = [
+  { name = "context", ty = "&horizon_client::mod_api::NativeLootDrops<'_>", value = "context" },
+  { name = "drops", ty = "&mut Vec<horizon_client::items::ItemStack>", value = "&mut *drops" },
+]

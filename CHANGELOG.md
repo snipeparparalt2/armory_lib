@@ -4,6 +4,12 @@
 
 First version, for Horizon `fdc87ae` (Nightly 2026-11-08, game data 26.3).
 
+- Content mods need no code: the library reads `data/<mod id>/armory_lib.json` from every
+  content mod and carries out what it declares, when a world opens and on `/reload`.
+- Gear rules, from the file: armour set bonuses (effects, no fall damage, healing, less knockback
+  or explosion damage, more experience), sneak abilities (vein mining, 3 x 3 digging, tree
+  felling), harvest sweeps, and weapon effects (backstab, splash, fire, healing on a kill,
+  bonuses against mobs or in a dimension, head drops).
 - Mob looks: `register_mob_look` draws a mod entity type with its own texture, and an optional
   glowing layer, on a vanilla body (zombie, humanoid, wolf, chicken or any other model layer),
   with the walk cycle, head turn, hurt flash and death fall.

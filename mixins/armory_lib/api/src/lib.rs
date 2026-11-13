@@ -11,8 +11,12 @@
 //! - [`register_gear_light`]: items that light the world in their colour.
 //! - [`register_page`]: a row in Options > Mods with one switch per feature; [`switch`] reads one.
 //!
-//! It uses Horizon's catalog hooks and `Host`, and one mixin injection of its own (the
-//! daylight burn, which no catalog hook reaches; see `../../bridge.rs`).
+//! A content mod needs no code at all: it declares the same things, and its gear rules
+//! (armour set bonuses, tool abilities, harvest sweeps, weapon effects), in
+//! `data/<its id>/armory_lib.json`, which the library reads.
+//!
+//! This package uses Horizon's catalog hooks and `Host`. The gear rules and the daylight
+//! burn are the bundle's mixin half (`../../gear.rs`, `../../bridge.rs`).
 #![forbid(unsafe_code)]
 
 mod logic;
@@ -25,9 +29,12 @@ pub use logic::{
 use horizon_client::mod_api::{
     EquipmentSlot, Flow, Hooks, Host, LivingConversionPreEvent, LivingIncomingDamageV3Event,
     MobSubmitEvent, ModelPart, ModsEvent, NativeColoredLight, NativeEffect, NativeMod,
-    PlayerTickEvent, SettingsClickEvent, SettingsEvent, VisualsEvent,
+    ClientResourcesReloadedEvent, PlayerTickEvent, ServerDataLoadedEvent, SettingsClickEvent,
+    SettingsEvent, VisualsEvent,
 };
 use std::collections::HashMap;
+use horizon_client::armory_lib_bridge as bridge;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -36,13 +43,22 @@ use std::time::{Duration, Instant};
 // again inside themselves, so each lock is held only to copy out or to store.
 // ---------------------------------------------------------------------------------------
 
-#[derive(Default)]
+/// What is in force: the mods' files overlaid by what was registered from code.
+#[derive(Clone, Default)]
 struct Registry {
     lights: HashMap<String, GearLight>,
     looks: HashMap<String, MobLook>,
     rules: HashMap<String, MobRules>,
     carried: Vec<CarriedEffect>,
     pages: Vec<Page>,
+}
+
+/// Where the registry comes from: `api` is what `register_*` was given, `files` what the
+/// content mods' `data/<mod>/armory_lib.json` declare, read again when the data reloads.
+#[derive(Default)]
+struct Sources {
+    api: Registry,
+    files: Registry,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -55,21 +71,46 @@ fn registry() -> MutexGuard<'static, Registry> {
     lock(R.get_or_init(Mutex::default))
 }
 
+fn sources() -> MutexGuard<'static, Sources> {
+    static S: OnceLock<Mutex<Sources>> = OnceLock::new();
+    lock(S.get_or_init(Mutex::default))
+}
+
+/// Puts the two sources together again. Code wins where both name the same thing.
+fn rebuild(sources: &Sources) {
+    let mut all = sources.files.clone();
+    let api = &sources.api;
+    all.lights.extend(api.lights.clone());
+    all.looks.extend(api.looks.clone());
+    all.rules.extend(api.rules.clone());
+    all.carried.extend(api.carried.iter().cloned());
+    for page in &api.pages {
+        all.pages.retain(|p| p.mod_id != page.mod_id);
+        all.pages.push(page.clone());
+    }
+    spare_from_sun(&all.rules, |_| true);
+    *registry() = all;
+}
+
 /// Makes `light.item` glow. A later registration of the same item replaces the earlier one.
 pub fn register_gear_light(light: GearLight) {
-    registry().lights.insert(light.item.clone(), light);
+    let mut s = sources();
+    s.api.lights.insert(light.item.clone(), light);
+    rebuild(&s);
 }
 
 /// Draws entity type `look.kind` with its own texture. A later registration replaces it.
 pub fn register_mob_look(look: MobLook) {
-    registry().looks.insert(look.kind.clone(), look);
+    let mut s = sources();
+    s.api.looks.insert(look.kind.clone(), look);
+    rebuild(&s);
 }
 
 /// Sets the rules of entity type `rules.kind`. A later registration replaces them.
 pub fn register_mob_rules(rules: MobRules) {
-    let mut r = registry();
-    r.rules.insert(rules.kind.clone(), rules);
-    spare_from_sun(&r.rules, |_| true);
+    let mut s = sources();
+    s.api.rules.insert(rules.kind.clone(), rules);
+    rebuild(&s);
 }
 
 /// Tells the bridge which types daylight must not light: those with `no_sunburn` whose
@@ -81,20 +122,74 @@ fn spare_from_sun(rules: &HashMap<String, MobRules>, on: impl Fn(&str) -> bool) 
         .map(|r| r.kind.clone())
         .collect();
     kinds.sort();
-    horizon_client::armory_lib_bridge::set_no_sunburn(kinds);
+    bridge::set_no_sunburn(kinds);
 }
 
 /// Adds an effect a player has while carrying an item.
 pub fn register_carried_effect(effect: CarriedEffect) {
-    registry().carried.push(effect);
+    let mut s = sources();
+    s.api.carried.push(effect);
+    rebuild(&s);
 }
 
 /// Adds a mod's row to Options > Mods, with its switches. One page a mod: a later
 /// registration with the same `mod_id` replaces the earlier one.
 pub fn register_page(page: Page) {
-    let mut r = registry();
-    r.pages.retain(|p| p.mod_id != page.mod_id);
-    r.pages.push(page);
+    let mut s = sources();
+    s.api.pages.retain(|p| p.mod_id != page.mod_id);
+    s.api.pages.push(page);
+    rebuild(&s);
+}
+
+// ---------------------------------------------------------------------------------------
+// The mods' files. A content mod declares what its items and creatures do in
+// `data/<its id>/armory_lib.json` (the README has the format), so it needs no code of its
+// own. They are read on the first hook with a host and again when the data reloads.
+// ---------------------------------------------------------------------------------------
+
+static LOADED: AtomicBool = AtomicBool::new(false);
+
+fn ensure_loaded(host: &dyn Host) {
+    if !LOADED.swap(true, Ordering::AcqRel) {
+        load(host);
+    }
+}
+
+fn load(host: &dyn Host) {
+    let mut files = Registry::default();
+    let mut gear = bridge::Gear::default();
+    let mut problems = Vec::new();
+    for id in bridge::content_mod_ids(&host.instance_dir().join("horizon-mods")) {
+        let Some(bytes) = host.data(&format!("data/{id}/armory_lib.json")) else {
+            continue;
+        };
+        let file: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(file) => file,
+            Err(e) => {
+                problems.push(format!("{id}: armory_lib.json is not JSON: {e}"));
+                continue;
+            }
+        };
+        let declared = logic::read_file(&id, &file);
+        if !declared.usable {
+            problems.extend(declared.problems);
+            continue;
+        }
+        problems.extend(declared.problems);
+        problems.extend(bridge::read_gear(&id, &file, &mut gear));
+        files.lights.extend(declared.lights.into_iter().map(|l| (l.item.clone(), l)));
+        files.looks.extend(declared.looks.into_iter().map(|l| (l.kind.clone(), l)));
+        files.rules.extend(declared.rules.into_iter().map(|r| (r.kind.clone(), r)));
+        files.carried.extend(declared.carried);
+        files.pages.extend(declared.page);
+    }
+    for problem in problems {
+        eprintln!("Armory Lib: {problem}");
+    }
+    bridge::set_gear(gear);
+    let mut s = sources();
+    s.files = files;
+    rebuild(&s);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -278,8 +373,25 @@ fn grow(part: &mut ModelPart, by: f32) {
 }
 
 impl Hooks for Lib {
+    /// A world opened or `/reload` ran: the mods' files are read again.
+    fn server_data_loaded(&self, host: &mut dyn Host, _event: &mut ServerDataLoadedEvent) {
+        LOADED.store(true, Ordering::Release);
+        load(host);
+    }
+
+    /// The resource packs reloaded: the mods' files are read again.
+    fn client_resources_reloaded(
+        &self,
+        host: &mut dyn Host,
+        _event: &mut ClientResourcesReloadedEvent,
+    ) {
+        LOADED.store(true, Ordering::Release);
+        load(host);
+    }
+
     /// Options > Mods: a row for each registered page.
-    fn mods(&self, _host: &mut dyn Host, event: &mut ModsEvent<'_>) {
+    fn mods(&self, host: &mut dyn Host, event: &mut ModsEvent<'_>) {
+        ensure_loaded(host);
         let pages = registry().pages.clone();
         for page in pages {
             if event.mods.iter().any(|m| m.id == page.mod_id) {
@@ -296,6 +408,7 @@ impl Hooks for Lib {
 
     /// A registered page's buttons.
     fn settings(&self, host: &mut dyn Host, event: &mut SettingsEvent<'_>) {
+        ensure_loaded(host);
         let page = registry().pages.iter().find(|p| p.mod_id == event.mod_id).cloned();
         let Some(page) = page else {
             return;
@@ -320,6 +433,7 @@ impl Hooks for Lib {
     /// Once a world frame: the lights of glowing gear on the player, on the creatures
     /// around and on the ground. They are frame-local, so they go out at once.
     fn visuals(&self, host: &dyn Host, event: &mut VisualsEvent<'_>) {
+        ensure_loaded(host);
         let lights = registry().lights.clone();
         if lights.is_empty() {
             return;
@@ -385,6 +499,7 @@ impl Hooks for Lib {
 
     /// A registered entity type is drawn with its look in place of its template's model.
     fn mob_submit(&self, host: &dyn Host, event: &mut MobSubmitEvent<'_>) -> Flow {
+        ensure_loaded(host);
         let look = registry().looks.get(event.mob.kind).cloned();
         match look {
             Some(look) if host.on(&look.mod_id) && self.draw_look(host, &look, event) => {
@@ -434,6 +549,7 @@ impl Hooks for Lib {
 
     /// Each player's server tick: the effects of what they carry, and of the hits they took.
     fn player_tick(&self, host: &mut dyn Host, _event: &mut PlayerTickEvent) {
+        ensure_loaded(host);
         let Some(me) = host.acting_player() else {
             return;
         };
