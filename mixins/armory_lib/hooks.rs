@@ -186,6 +186,7 @@ fn load(host: &dyn Host) {
         // ---- Batch B: waystones and recall charm (read here) ----
 
         // ---- Batch B: trinket slots (read here) ----
+        problems.extend(super::armory_lib_trinkets_logic::load_file(&id, &file));
 
         files.lights.extend(declared.lights.into_iter().map(|l| (l.item.clone(), l)));
         files.looks.extend(declared.looks.into_iter().map(|l| (l.kind.clone(), l)));

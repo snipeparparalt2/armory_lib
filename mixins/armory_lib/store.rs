@@ -8,21 +8,18 @@ use horizon_world::nbt::Tag;
 use std::path::{Path, PathBuf};
 
 /// `<world>/armory_lib/<rel>`; None with no world open (a client of a server).
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn path(game: &Game<'_>, rel: &str) -> Option<PathBuf> {
     Some(game.native_world_dir()?.join("armory_lib").join(rel))
 }
 
 /// The slots `write_items` saved at `path`, `size` of them; empty ones where the file has none
 /// (or there is no file).
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn read_items(path: &Path, size: usize) -> Vec<Option<ItemStack>> {
     let tag = horizon_client::save::read_dat(path);
     horizon_items::item_nbt::decode_items(tag.as_ref().and_then(|t| t.get("Items")), size)
 }
 
 /// Saves `slots` at `path` (making its folder), as a chest saves its items.
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn write_items(path: &Path, slots: &[Option<ItemStack>]) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;

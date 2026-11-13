@@ -333,3 +333,108 @@ bindings = [
 # ---- Batch B: waystones and recall charm ----
 
 # ---- Batch B: trinket slots ----
+
+# `trinkets_logic.rs`: what the mods declare under `trinket_slots` and `trinkets`, and the sums
+# (which modifiers apply, the slots' place in the row, what a closing menu keeps), with nothing
+# from the game in it.
+[[module]]
+id = "trinkets_logic"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_trinkets_logic"
+source = "trinkets_logic.rs"
+
+# `trinkets.rs`: the trinket slots in the game: the key, `/trinkets` and its one-row menu, the
+# player's file in `<world>/armory_lib/trinkets/`, the trinkets' modifiers and experience bonus.
+[[module]]
+id = "trinkets"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_trinkets"
+source = "trinkets.rs"
+
+# The window's side: the trinkets key while playing, in the player's own inventory (taken there
+# and sent at the next client tick, as the screen hook has only `&self`).
+[[injection]]
+id = "trinket_key"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_key"
+helper = "trinket_key.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "key", ty = "&str", value = "key" },
+  { name = "pressed", ty = "bool", value = "pressed" },
+]
+
+[[injection]]
+id = "trinket_screen_key"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_key_pressed_pre"
+helper = "trinket_screen_key.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "screen", ty = "&horizon_client::mod_api::NativeScreenView<'_>", value = "screen" },
+  { name = "key", ty = "&str", value = "key" },
+  { name = "repeat", ty = "bool", value = "repeat" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "trinket_client_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_tick_pre"
+helper = "trinket_client_tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+# The server's side: `/trinkets` and its menu, what the menu keeps as it closes, and what the
+# trinkets do each player tick and to the orbs a player picks up.
+[[injection]]
+id = "trinket_commands"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_register_commands"
+helper = "trinket_commands.rs"
+bindings = [
+  { name = "commands", ty = "&mut Vec<horizon_client::mod_api::NativeCommand>", value = "&mut *commands" },
+]
+
+[[injection]]
+id = "trinket_command"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_perform_command"
+helper = "trinket_command.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "&horizon_client::mod_api::NativeServerPlayer", value = "player" },
+  { name = "command", ty = "&str", value = "command" },
+  { name = "ran", ty = "&mut bool", value = "&mut *ran" },
+]
+
+[[injection]]
+id = "trinket_menu_closed"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_menu_input_closed"
+helper = "trinket_menu_closed.rs"
+bindings = [
+  { name = "uuid", ty = "u128", value = "uuid" },
+  { name = "window", ty = "i32", value = "window" },
+  { name = "slots", ty = "&mut Vec<Option<horizon_client::items::ItemStack>>", value = "&mut *slots" },
+]
+
+[[injection]]
+id = "trinket_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_player_tick"
+helper = "trinket_tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "trinket_experience"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_player_exp_change"
+helper = "trinket_experience.rs"
+bindings = [
+  { name = "player", ty = "u128", value = "player" },
+  { name = "amount", ty = "&mut i32", value = "&mut *amount" },
+]
