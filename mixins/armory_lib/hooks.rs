@@ -193,6 +193,7 @@ fn load(host: &dyn Host) {
         // ---- Batch C: soul forge and upgrades (read here) ----
 
         // ---- Batch C: soul pool and charged attacks (read here) ----
+        problems.extend(super::armory_lib_souls_logic::read(&id, &file));
 
         // ---- Batch C: creatures and bosses (read here) ----
 
