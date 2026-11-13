@@ -21,5 +21,9 @@ First version, for Horizon `fdc87ae` (Nightly 2026-11-08, game data 26.3).
   held, worn or lying on the ground.
 - Settings pages: `register_page` adds a row to Options > Mods with one switch per feature;
   `switch` reads one.
+- A plain mixin bundle, with no `[api]` package: launchers newer than Horizon `fdc87ae` build it
+  (a trait mod made them generate an executable for a newer Horizon, which failed with
+  ``cannot find type `GameAllocator` in crate `horizon_threads` ``). The `register_*` functions
+  are `horizon_client::game::armory_lib` in the game, for other mixin bundles.
 
 Not tested in a running game yet.

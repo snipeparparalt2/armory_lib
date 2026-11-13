@@ -24,9 +24,13 @@ def main():
     mod_id, version = mixin["mod"]["id"], mixin["mod"]["version"]
     if mixin["compatibility"]["horizon_revision"] != compat["horizon_revision"]:
         raise SystemExit("horizon-mixin.toml and compatibility.json pin different Horizon commits")
-    api = tomllib.loads((bundle / mixin["api"]["path"] / "Cargo.toml").read_text())
-    if api["package"]["version"] != version:
-        raise SystemExit("the api package and horizon-mixin.toml have different versions")
+    # A plain mixin bundle: an `[api]` package would make the launcher generate an executable,
+    # which launchers newer than the pinned commit write for a newer Horizon.
+    if "api" in mixin or "dependencies" in mixin:
+        raise SystemExit("horizon-mixin.toml must not have [api] or [dependencies]")
+    logic = (bundle / "logic.rs").read_text()
+    if f'pub const VERSION: &str = "{version}";' not in logic:
+        raise SystemExit("logic.rs VERSION and horizon-mixin.toml have different versions")
     manifest = {"schema": 1, "id": mod_id, "version": version, "game": compat["game"],
                 "horizon": compat["horizon_revision"], "mixins": compat["horizon_mixins_revision"]}
     files = {"horizon-native.json": (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()}

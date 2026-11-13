@@ -1,39 +1,41 @@
-//! Armory Lib: shared native machinery for Horizon mods.
-//!
-//! A mod that names `armory_lib` under `[dependencies]` in its `horizon-mixin.toml` calls the
-//! `register_*` functions from its own `hooks()`, once, at start. The library's hooks then do
-//! the work each frame and tick:
-//!
-//! - [`register_mob_look`]: a mod entity type drawn with its own texture on a vanilla body.
-//! - [`register_mob_rules`]: no conversion, no burning in daylight, no harm from fire, effects
-//!   on a hit.
-//! - [`register_carried_effect`]: an effect while an item is held, in the hotbar or worn.
-//! - [`register_gear_light`]: items that light the world in their colour.
-//! - [`register_page`]: a row in Options > Mods with one switch per feature; [`switch`] reads one.
-//!
-//! A content mod needs no code at all: it declares the same things, and its gear rules
-//! (armour set bonuses, tool abilities, harvest sweeps, weapon effects), in
-//! `data/<its id>/armory_lib.json`, which the library reads.
-//!
-//! This package uses Horizon's catalog hooks and `Host`. The gear rules and the daylight
-//! burn are the bundle's mixin half (`../../gear.rs`, `../../bridge.rs`).
-#![forbid(unsafe_code)]
+// Armory Lib's catalog hooks, added to the game as the public module
+// `horizon_client::game::armory_lib`.
+//
+// Another native mod's mixin code can call the `register_*` functions (its bundle then needs
+// Armory Lib installed beside it). The library's hooks do the work each frame and tick:
+//
+// - `register_mob_look`: a mod entity type drawn with its own texture on a vanilla body.
+// - `register_mob_rules`: no conversion, no burning in daylight, no harm from fire, effects
+//   on a hit.
+// - `register_carried_effect`: an effect while an item is held, in the hotbar or worn.
+// - `register_gear_light`: items that light the world in their colour.
+// - `register_page`: a row in Options > Mods with one switch per feature; `switch` reads one.
+//
+// A content mod needs no code at all: it declares the same things, and its gear rules
+// (armour set bonuses, tool abilities, harvest sweeps, weapon effects), in
+// `data/<its id>/armory_lib.json`, which the library reads.
+//
+// The hooks are Horizon's catalog hooks with `Host`, reached by the injections in
+// `horizon-mixin.toml` at the head of the game's own `native_*` functions (the `on_*`
+// functions at the end of this file), so the library needs no `[api]` package and the
+// launcher builds the game as it is. The gear rules are in `gear.rs`, what both share in
+// `bridge.rs`, the sums in `logic.rs`.
 
-mod logic;
-
-pub use logic::{
+pub use super::armory_lib_logic::{
     CarriedEffect, GearLight, HitEffect, ID, Motion, MobLook, MobRules, NAME, Page, Place, Rig,
     Switch, VERSION,
 };
 
-use horizon_client::mod_api::{
-    EquipmentSlot, Flow, Hooks, Host, LivingConversionPreEvent, LivingIncomingDamageV3Event,
-    MobSubmitEvent, ModelPart, ModsEvent, NativeColoredLight, NativeEffect, NativeMod,
-    ClientResourcesReloadedEvent, PlayerTickEvent, ServerDataLoadedEvent, SettingsClickEvent,
-    SettingsEvent, VisualsEvent,
+use super::armory_lib_logic as logic;
+use super::{BlockEntityDraw, NativeMobRender};
+use crate::mod_api::{
+    ClientResourcesReloadedEvent, EquipmentSlot, Flow, Hooks, Host, LivingConversionPreEvent,
+    LivingIncomingDamageV3Event, MobSubmitEvent, ModelPart, ModsEvent, NativeBlockRim,
+    NativeColoredLight, NativeEffect, NativeMod, PlayerTickEvent, ServerDataLoadedEvent,
+    SettingsClickEvent, SettingsEvent, VisualsEvent,
 };
-use std::collections::HashMap;
 use horizon_client::armory_lib_bridge as bridge;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
@@ -241,9 +243,22 @@ fn mods_on() -> MutexGuard<'static, HashMap<String, bool>> {
 // The hooks
 // ---------------------------------------------------------------------------------------
 
-pub fn hooks() -> Box<dyn Hooks> {
-    Box::new(Lib::default())
+/// The library's one set of hooks, made on first use.
+fn lib() -> &'static Lib {
+    static LIB: OnceLock<Lib> = OnceLock::new();
+    LIB.get_or_init(Lib::default)
 }
+
+/// Whether the player has Armory Lib on in Options > Mods (as a trait mod, the game skipped
+/// its hooks while it was off).
+fn lib_on(host: &dyn Host) -> bool {
+    let on = host.on(ID);
+    LIB_ON.store(on, Ordering::Relaxed);
+    on
+}
+
+/// What [`lib_on`] last found, for the one hook with no host.
+static LIB_ON: AtomicBool = AtomicBool::new(true);
 
 /// A player the library gave effects to.
 #[derive(Default)]
@@ -633,5 +648,125 @@ impl Hooks for Lib {
                 );
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Where the game reaches the library: each is called by an injection at the head of the
+// game's own `native_*` function of the same name, before the trait mods' hooks, with the
+// game as the host. A flag the library sets (cancel, drawn) is one those hooks see set.
+// ---------------------------------------------------------------------------------------
+
+/// `native_server_data_loaded`. The files are read whether or not the library is on, so
+/// they are current when it is turned on again.
+pub(crate) fn on_server_data_loaded(host: &mut dyn Host, reload: bool) {
+    lib().server_data_loaded(host, &mut ServerDataLoadedEvent { reload });
+}
+
+/// `native_client_resources_reloaded`. Read whether or not the library is on, as above.
+pub(crate) fn on_client_resources_reloaded(host: &mut dyn Host) {
+    lib().client_resources_reloaded(host, &mut ClientResourcesReloadedEvent {});
+}
+
+/// `native_mods`.
+pub(crate) fn on_mods(host: &mut dyn Host, mods: &mut Vec<NativeMod>) {
+    if lib_on(host) {
+        lib().mods(host, &mut ModsEvent { mods });
+    }
+}
+
+/// `native_settings`.
+pub(crate) fn on_settings(host: &mut dyn Host, mod_id: &str, buttons: &mut Vec<String>) {
+    if lib_on(host) {
+        lib().settings(host, &mut SettingsEvent { mod_id, buttons });
+    }
+}
+
+/// `native_settings_click`.
+pub(crate) fn on_settings_click(host: &mut dyn Host, mod_id: &str, button: usize) {
+    if lib_on(host) {
+        lib().settings_click(host, &mut SettingsClickEvent { mod_id, button });
+    }
+}
+
+/// `native_visuals`.
+pub(crate) fn on_visuals(
+    host: &dyn Host,
+    rims: &mut Vec<NativeBlockRim>,
+    lights: &mut Vec<NativeColoredLight>,
+) {
+    if lib_on(host) {
+        lib().visuals(host, &mut VisualsEvent { rims, lights });
+    }
+}
+
+/// `native_mob_submit`: `drawn` is set when the library drew the mob.
+pub(crate) fn on_mob_submit(
+    host: &dyn Host,
+    mob: &NativeMobRender<'_>,
+    draw: &mut BlockEntityDraw,
+    drawn: &mut bool,
+) {
+    if *drawn || !lib_on(host) {
+        return;
+    }
+    if lib().mob_submit(host, &mut MobSubmitEvent { mob, draw }) == Flow::Cancel {
+        *drawn = true;
+    }
+}
+
+/// `native_living_conversion_pre`: `cancel` is set when the mob keeps its type.
+pub(crate) fn on_living_conversion_pre(
+    host: &mut dyn Host,
+    entity: u32,
+    kind: &str,
+    outcome: &str,
+    cancel: &mut bool,
+) {
+    if *cancel || !lib_on(host) {
+        return;
+    }
+    let mut event = LivingConversionPreEvent { entity, kind, outcome };
+    if lib().living_conversion_pre(host, &mut event) == Flow::Cancel {
+        *cancel = true;
+    }
+}
+
+/// `native_living_incoming_damage_v3` (it has no host).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn on_living_incoming_damage_v3(
+    victim: u32,
+    victim_uuid: Option<u128>,
+    kind: &str,
+    attacker: Option<u32>,
+    attacker_uuid: Option<u128>,
+    direct: Option<u32>,
+    damage_type: &str,
+    amount: &mut f32,
+    cancel: &mut bool,
+) {
+    if *cancel || !LIB_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut event = LivingIncomingDamageV3Event {
+        victim,
+        victim_uuid,
+        kind,
+        attacker,
+        attacker_uuid,
+        direct,
+        damage_type,
+        amount: *amount,
+    };
+    if lib().living_incoming_damage_v3(&mut event) == Flow::Cancel {
+        *cancel = true;
+    }
+    *amount = event.amount;
+}
+
+/// `native_player_tick`, with the ticking player swapped in.
+pub(crate) fn on_player_tick(host: &mut dyn Host) {
+    if lib_on(host) {
+        lib().player_tick(host, &mut PlayerTickEvent {});
     }
 }

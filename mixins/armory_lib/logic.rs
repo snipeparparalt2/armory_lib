@@ -1,5 +1,5 @@
-//! Armory Lib's logic, with nothing from the game in it: what mods register, and the sums the
-//! hooks in `lib.rs` do with it. `cargo test` at the repository root runs this file alone.
+// Armory Lib's logic, with nothing from the game in it: what mods register, and the sums the
+// hooks in `hooks.rs` do with it. `cargo test` at the repository root runs this file alone.
 
 pub const ID: &str = "armory_lib";
 pub const NAME: &str = "Armory Lib";

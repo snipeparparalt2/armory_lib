@@ -130,57 +130,47 @@ ARMORY_LIB_FILE=path/to/armory_lib.json cargo test checks_a_mods_file
 
 ### From a native mod: Rust
 
-Your bundle needs an `[api]` package (Horizon's `docs/native-mods.md`, "Trait mods"), and this in
-its `horizon-mixin.toml`:
-
-```toml
-[api]
-path = "api"
-
-[dependencies]
-armory_lib = "^0.1"
-```
-
-Don't add `armory_lib` to your `Cargo.toml`: the launcher adds it when it builds. Then register
-from your package's `hooks()`. What you register wins over a file entry for the same item or
-entity type.
+Armory Lib is a plain mixin bundle, and its hooks are the public module
+`horizon_client::game::armory_lib` in the game it builds. A native mod's mixin code can call its
+`register_*` functions; the player then needs Armory Lib installed beside that mod. Register
+once, from the first hook your mod gets (for example its `native_mods` helper). What you register
+wins over a file entry for the same item or entity type.
 
 ```rust
-use armory_lib::{CarriedEffect, GearLight, MobLook, MobRules, Page, Place, Rig, Switch};
-use horizon_client::mod_api::Hooks;
+// In a module your bundle adds to crates/horizon-client/src/game.rs.
+use horizon_client::game::armory_lib::{
+    self as lib, CarriedEffect, GearLight, MobLook, MobRules, Page, Place, Rig, Switch,
+};
 
-pub fn hooks() -> Box<dyn Hooks> {
-    armory_lib::register_page(Page {
+pub(crate) fn register() {
+    lib::register_page(Page {
         mod_id: "mymod".into(),
         title: "My Mod 1.0".into(),
         description: "Glowing swords and a cave lurker.".into(),
         switches: vec![Switch::new("glow", "Glow")],
     });
-    armory_lib::register_gear_light(
-        GearLight::new("mymod", "mymod:glow_sword", 0x8cffe2).setting("glow"),
-    );
-    armory_lib::register_mob_look(
+    lib::register_gear_light(GearLight::new("mymod", "mymod:glow_sword", 0x8cffe2).setting("glow"));
+    lib::register_mob_look(
         MobLook::new("mymod", "mymod:lurker", Rig::zombie(), "mymod:entity/lurker")
             .emissive("mymod:entity/lurker_e"),
     );
-    armory_lib::register_mob_rules(
+    lib::register_mob_rules(
         MobRules::new("mymod", "mymod:lurker")
             .no_conversion()
             .no_sunburn()
             .on_hit("minecraft:slowness", 0, 100),
     );
-    armory_lib::register_carried_effect(CarriedEffect::new(
+    lib::register_carried_effect(CarriedEffect::new(
         "mymod",
         &["mymod:swift_ring"],
         Place::Hotbar,
         "minecraft:speed",
     ));
-    Box::new(MyMod)
 }
-
-struct MyMod;
-impl Hooks for MyMod {}
 ```
+
+A content mod gets all of this from its file, with no code, and that is the way to use the
+library from a mod players install from the mod browser.
 
 | Function | What it takes |
 |---|---|
@@ -233,19 +223,21 @@ built in code rather than taken from vanilla.
 | Game data | 26.3 |
 | horizon-mixins | `e8cd0aa38cffef49cb2e088ef716baa107148c02` |
 
-The library has two halves. The `[api]` package uses Horizon's catalog hooks (`mods`,
-`settings`, `settings_click`, `visuals`, `mob_submit`, `living_conversion_pre`,
-`living_incoming_damage_v3`, `player_tick`, `server_data_loaded`, `client_resources_reloaded`) and
-`Host` helpers. The mixin half adds `armory_lib_bridge` to the client library and `armory_lib_gear`
-to the game, hooks ten catalog hook points for the gear, and hooks the start of
-`mobs::ai::burn_undead` for `no_sunburn`. It reads the game's state directly and hooks that raw
-target, so the library is pinned to one Horizon commit.
+The library is a plain mixin bundle, with no `[api]` package, so the launcher builds the game as
+it is (a trait mod would make it generate its own executable, which newer launchers write for a
+newer Horizon). It adds `armory_lib_bridge` to the client library and `armory_lib`,
+`armory_lib_logic` and `armory_lib_gear` to the game, and hooks the head of the game's own catalog
+hook functions: `native_mods`, `native_settings`, `native_settings_click`, `native_visuals`,
+`native_mob_submit`, `native_living_conversion_pre`, `native_living_incoming_damage_v3`,
+`native_player_tick`, `native_server_data_loaded`, `native_client_resources_reloaded` with the
+game as `Host`, and ten more for the gear. It hooks the start of `mobs::ai::burn_undead` for
+`no_sunburn` and reads the game's state directly, so the library is pinned to one Horizon commit.
 
 ## Build, check and package
 
 ```sh
 cargo test                                   # the logic and the bridge, without the game
-HORIZON_SRC=<horizon checkout> tools/check.sh   # type-check against Horizon, staged as the launcher stages it
+HORIZON_SRC=<horizon checkout> tools/check.sh   # type-check the game with the bundle applied, as the launcher builds it
 python3 tools/package.py                     # dist/armory_lib-<version>.hnmod and SHA256SUMS.txt
 cargo horizon-mod check dist/armory_lib-<version>.hnmod   # Horizon's own package check
 ```
@@ -271,11 +263,11 @@ it with a new version number.
 ## Repository map
 
 - `mixins/armory_lib/`: the bundle the launcher builds.
-  - `api/src/lib.rs`: the `[api]` package's hooks, the registry and reading the mods' files;
-    `api/src/logic.rs`: its logic and tests.
-  - `bridge.rs`: shared with the mixin code: the gear rules, their logic and tests, switches,
-    the daylight list. `gear.rs`: the gear rules in the game. `sunburn.rs` and the other `.rs`
-    files: one small helper per hook.
+  - `hooks.rs`: the catalog hooks, the registry and reading the mods' files; `logic.rs`: their
+    logic and tests.
+  - `bridge.rs`: what all parts share: the gear rules, their logic and tests, switches, the
+    daylight list. `gear.rs`: the gear rules in the game. `sunburn.rs` and the other `.rs` files:
+    one small helper per hook.
 - `tools/`: packaging, the type-check script and the icon generator
 - `docs/`: the icon and the signing guide
 - `dist/`: the latest built package and its checksum

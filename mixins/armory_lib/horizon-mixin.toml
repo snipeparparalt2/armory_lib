@@ -1,9 +1,9 @@
-# Armory Lib: a native library mod (Horizon docs/native-mods.md, "Trait mods" and
-# "Dependencies between trait mods"). It carries out what content mods declare in their
-# `data/<mod id>/armory_lib.json`, so they need no code of their own. Native mods can also
-# name it under `[dependencies]` in their horizon-mixin.toml and call its public functions.
-# The `[api]` package is linked beside the game; the modules and injections below are its
-# mixin half.
+# Armory Lib: a native library mod. It carries out what content mods declare in their
+# `data/<mod id>/armory_lib.json`, so they need no code of their own.
+#
+# It is a plain mixin bundle (Horizon docs/native-mods.md): modules added to the game and
+# injections at the head of the game's own `native_*` hook functions. It has no `[api]`
+# package, so the launcher builds the game as it is and needs no generated executable.
 [mod]
 id = "armory_lib"
 version = "0.1.0"
@@ -11,15 +11,10 @@ version = "0.1.0"
 [compatibility]
 horizon_revision = "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca"
 
-[api]
-path = "api"
-
-# The mixin half. `bridge.rs` is added to the game's client library as the public module
-# `horizon_client::armory_lib_bridge`: what the `[api]` package and the mixin code share (the
-# gear rules read from the mods' files, their logic, the switches, the daylight list).
-# `gear.rs` runs the gear rules in the game. Its hooks are catalog hook points, but it reads
-# the player's break, the mob list and block facts straight from `Game`, and `sunburn.rs`
-# hooks a raw target, so the library is pinned to the Horizon commit above.
+# `bridge.rs` is added to the game's client library as the public module
+# `horizon_client::armory_lib_bridge`: what all the parts share (the gear rules read from the
+# mods' files, their logic, the switches, the daylight list), reachable from the mob code the
+# sunburn injection runs in.
 [[module]]
 id = "bridge"
 file = "crates/horizon-client/src/client_lib.rs"
@@ -27,11 +22,121 @@ name = "armory_lib_bridge"
 source = "bridge.rs"
 visibility = "pub"
 
+# `logic.rs`: the sums of the catalog hooks, with nothing from the game in it.
+[[module]]
+id = "logic"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_logic"
+source = "logic.rs"
+visibility = "pub"
+
+# `hooks.rs`: the catalog hooks (mob looks, mob rules, carried-item effects, gear light,
+# settings pages) and the `register_*` functions other native mods can call, as
+# `horizon_client::game::armory_lib`.
+[[module]]
+id = "hooks"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib"
+source = "hooks.rs"
+visibility = "pub"
+
+# `gear.rs` runs the gear rules in the game. It reads the player's break, the mob list and
+# block facts straight from `Game`, and `sunburn.rs` hooks a raw target, so the library is
+# pinned to the Horizon commit above.
 [[module]]
 id = "gear"
 file = "crates/horizon-client/src/game.rs"
 name = "armory_lib_gear"
 source = "gear.rs"
+
+# The catalog hooks: the mods' files read when the data or the resources reload, the pages
+# in Options > Mods, the gear light, the creatures' looks and their conversions.
+[[injection]]
+id = "server_data_loaded"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_server_data_loaded"
+helper = "server_data_loaded.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "reload", ty = "bool", value = "reload" },
+]
+
+[[injection]]
+id = "resources_reloaded"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_resources_reloaded"
+helper = "resources_reloaded.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "mods"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mods"
+helper = "mods.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mods", ty = "&mut Vec<horizon_client::mod_api::NativeMod>", value = "&mut *mods" },
+]
+
+[[injection]]
+id = "settings"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings"
+helper = "settings.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "buttons", ty = "&mut Vec<String>", value = "&mut *buttons" },
+]
+
+[[injection]]
+id = "settings_click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings_click"
+helper = "settings_click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "button", ty = "usize", value = "button" },
+]
+
+[[injection]]
+id = "visuals"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_visuals"
+helper = "visuals.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "rims", ty = "&mut Vec<horizon_client::mod_api::NativeBlockRim>", value = "&mut *rims" },
+  { name = "lights", ty = "&mut Vec<horizon_client::mod_api::NativeColoredLight>", value = "&mut *lights" },
+]
+
+[[injection]]
+id = "mob_submit"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mob_submit"
+helper = "mob_submit.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "mob", ty = "&crate::game::NativeMobRender<'_>", value = "mob" },
+  { name = "draw", ty = "&mut crate::game::BlockEntityDraw", value = "&mut *draw" },
+  { name = "drawn", ty = "&mut bool", value = "&mut *drawn" },
+]
+
+[[injection]]
+id = "conversion"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_conversion_pre"
+helper = "conversion.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "entity", ty = "u32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
+  { name = "outcome", ty = "&str", value = "outcome" },
+  { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },
+]
 
 # Daylight is about to set an undead mob alight (vanilla's `Mob.burnUndead`): not a type a
 # mod listed with `no_sunburn`.
@@ -43,9 +148,10 @@ cancellable = true
 helper = "sunburn.rs"
 bindings = [{ name = "mob", ty = "&crate::mobs::Mob", value = "&*m" }]
 
-# Set bonuses: effects and a set's healing each player tick (with that player
-# swapped in), falls and explosions in the incoming damage, a set's knockback and
-# experience. The player tick also deals weapon splashes.
+# Each player's tick (with that player swapped in): carried-item effects and the effects of
+# hits taken, a set's effects and healing, weapon splashes. The incoming damage: fire-proof
+# creatures, the hits that give effects, set bonuses against falls and explosions. A set's
+# knockback and experience.
 [[injection]]
 id = "player_tick"
 kind = "HEAD"
@@ -61,7 +167,12 @@ kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v3"
 helper = "incoming_damage.rs"
 bindings = [
+  { name = "victim", ty = "u32", value = "victim" },
   { name = "victim_uuid", ty = "Option<u128>", value = "victim_uuid" },
+  { name = "kind", ty = "&str", value = "kind" },
+  { name = "attacker", ty = "Option<u32>", value = "attacker" },
+  { name = "attacker_uuid", ty = "Option<u128>", value = "attacker_uuid" },
+  { name = "direct", ty = "Option<u32>", value = "direct" },
   { name = "damage_type", ty = "&str", value = "damage_type" },
   { name = "amount", ty = "&mut f32", value = "&mut *amount" },
   { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },

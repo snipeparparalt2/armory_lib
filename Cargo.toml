@@ -1,5 +1,5 @@
 # Runs the library's pure logic and its tests without the game: `cargo test`.
-# The package the game links is mixins/armory_lib/api/.
+# The game gets these files through the mixin bundle in mixins/armory_lib/.
 [package]
 name = "armory-lib-logic"
 version = "0.1.0"
@@ -8,7 +8,7 @@ publish = false
 license = "MPL-2.0"
 
 [lib]
-path = "mixins/armory_lib/api/src/logic.rs"
+path = "mixins/armory_lib/logic.rs"
 
 # The half added to the game's client library: gear rules and their logic.
 [[test]]
