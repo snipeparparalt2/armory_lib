@@ -331,5 +331,90 @@ bindings = [
 # ---- Batch B: backpacks and soul jar ----
 
 # ---- Batch B: waystones and recall charm ----
+# `ways.rs`: waystones (a travel menu between the ones a player found, kept for each world in
+# `<world>/armory_lib/waystones.json`) and the recall charm (home, or to the waystone it is bound
+# to), as `game::armory_lib_ways`. `ways_logic.rs`: what they read from the mods' files and
+# their sums, with nothing from the game in it (`cargo test` runs it as the `ways` test).
+[[module]]
+id = "ways"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_ways"
+source = "ways.rs"
+
+[[module]]
+id = "ways_logic"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_ways_logic"
+source = "ways_logic.rs"
+
+# A right click on a waystone: renaming it, binding a recall charm, or its travel menu, which
+# opens at the next server tick (a player's own turn can't reach the menus). A click in the
+# menu travels; its closing is noted. A broken waystone leaves the registry.
+[[injection]]
+id = "ways_right_click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_right_click_block"
+helper = "way_right_click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "ways_server_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_server_tick"
+helper = "way_server_tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "ways_menu_clicked"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_menu_clicked"
+helper = "way_menu_clicked.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "uuid", ty = "u128", value = "uuid" },
+  { name = "window", ty = "i32", value = "window" },
+  { name = "slot", ty = "i32", value = "slot" },
+  { name = "mode", ty = "i32", value = "mode" },
+]
+
+[[injection]]
+id = "ways_menu_closed"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"
+helper = "way_menu_closed.rs"
+bindings = [
+  { name = "uuid", ty = "u128", value = "uuid" },
+  { name = "window", ty = "i32", value = "window" },
+]
+
+[[injection]]
+id = "ways_destroy_block"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_destroy_block"
+helper = "way_destroy_block.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# The recall charm: a right click in the air (or on a block, once the block let it through).
+[[injection]]
+id = "recall_use_item"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_use_item"
+helper = "recall_use_item.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
 
 # ---- Batch B: trinket slots ----

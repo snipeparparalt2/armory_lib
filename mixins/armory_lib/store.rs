@@ -8,7 +8,6 @@ use horizon_world::nbt::Tag;
 use std::path::{Path, PathBuf};
 
 /// `<world>/armory_lib/<rel>`; None with no world open (a client of a server).
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn path(game: &Game<'_>, rel: &str) -> Option<PathBuf> {
     Some(game.native_world_dir()?.join("armory_lib").join(rel))
 }
@@ -32,13 +31,11 @@ pub(super) fn write_items(path: &Path, slots: &[Option<ItemStack>]) -> Result<()
 }
 
 /// A JSON file of the library's, or None when there is none or it doesn't parse.
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 /// Writes a JSON file whole (making its folder).
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
     if let Some(dir) = path.parent() {
@@ -56,7 +53,6 @@ pub(super) fn custom<'a>(stack: &'a ItemStack, key: &str) -> Option<&'a Tag> {
 }
 
 /// A text value of the stack's `minecraft:custom_data`.
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn custom_text(stack: &ItemStack, key: &str) -> Option<String> {
     match custom(stack, key)? {
         Tag::String(s) => Some(s.to_string_lossy()),
@@ -75,7 +71,6 @@ pub(super) fn custom_int(stack: &ItemStack, key: &str) -> Option<i32> {
 
 /// Sets (or with None removes) `key` in the stack's `minecraft:custom_data`; the component goes
 /// when it is left empty.
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn set_custom(stack: &mut ItemStack, key: &str, value: Option<Tag>) {
     let mut data = stack.custom_data().cloned().unwrap_or_default();
     data.retain(|k, _| k.to_string_lossy() != key);
@@ -90,7 +85,6 @@ pub(super) fn set_custom(stack: &mut ItemStack, key: &str, value: Option<Tag>) {
 }
 
 /// A fresh random id (16 hex digits), for something the library keeps by id.
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn new_id() -> String {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();

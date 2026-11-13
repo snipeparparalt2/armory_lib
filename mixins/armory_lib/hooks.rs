@@ -184,6 +184,7 @@ fn load(host: &dyn Host) {
         // ---- Batch B: backpacks and soul jar (read here) ----
 
         // ---- Batch B: waystones and recall charm (read here) ----
+        problems.extend(super::armory_lib_ways::read(&id, &file));
 
         // ---- Batch B: trinket slots (read here) ----
 

@@ -15,5 +15,10 @@ path = "mixins/armory_lib/logic.rs"
 name = "bridge"
 path = "mixins/armory_lib/bridge.rs"
 
+# Waystones and the recall charm: their files, the registry, the menu's order, the cooldowns.
+[[test]]
+name = "ways"
+path = "mixins/armory_lib/ways_logic.rs"
+
 [dependencies]
 serde_json = "1"
