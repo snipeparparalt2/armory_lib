@@ -15,5 +15,10 @@ path = "mixins/armory_lib/logic.rs"
 name = "bridge"
 path = "mixins/armory_lib/bridge.rs"
 
+# Backpacks and soul jars: their rules from the mods' files and their sums.
+[[test]]
+name = "packs"
+path = "mixins/armory_lib/packs_logic.rs"
+
 [dependencies]
 serde_json = "1"
