@@ -41,7 +41,7 @@ you trust. The whole source is in [`mixins/armory_lib/api/src`](mixins/armory_li
 | Piece | You register | The library does |
 |---|---|---|
 | Mob looks | An entity type, a body (`Rig`), a texture, an optional glowing texture | Draws the mob in place of its template's model, with the walk cycle, head turn, hurt flash and death fall |
-| Mob rules | An entity type and its rules | Stops it converting (a zombie copy under water), makes burning harmless to it, gives its melee hits effects |
+| Mob rules | An entity type and its rules | Stops it converting (a zombie copy under water), stops daylight setting it alight, makes fire harmless to it, gives its melee hits effects |
 | Carried-item effects | Items, where they must be, an effect | Gives the effect while the item is there and takes it away after |
 | Coloured gear light | An item, a colour, a strength | Lights the world around whoever holds or wears it, and around it on the ground |
 | Settings pages | A title and switches | Adds the row to Options > Mods, draws the buttons, keeps the choices |
@@ -86,7 +86,7 @@ pub fn hooks() -> Box<dyn Hooks> {
     armory_lib::register_mob_rules(
         MobRules::new("mymod", "mymod:lurker")
             .no_conversion()
-            .fire_proof()
+            .no_sunburn()
             .on_hit("minecraft:slowness", 0, 100),
     );
     armory_lib::register_carried_effect(CarriedEffect::new(
@@ -111,7 +111,7 @@ impl Hooks for MyMod {}
 | `register_gear_light(GearLight)` | `GearLight::new(mod_id, item, rgb)`, `.level(0.0..=1.0)`, `.setting(key)` |
 | `register_mob_look(MobLook)` | `MobLook::new(mod_id, kind, rig, texture)`, `.emissive(texture)`, `.scale(f32)` |
 | `Rig` | `Rig::zombie()`, `Rig::humanoid()`, `Rig::wolf()`, `Rig::chicken()`, `Rig::custom(layer, parts)` with `Motion::Head`, `Motion::Swing { phase, reach }`, `Motion::Raised` |
-| `register_mob_rules(MobRules)` | `MobRules::new(mod_id, kind)`, `.no_conversion()`, `.fire_proof()`, `.on_hit(effect, amplifier, ticks)` |
+| `register_mob_rules(MobRules)` | `MobRules::new(mod_id, kind)`, `.no_conversion()`, `.no_sunburn()`, `.fire_proof()`, `.on_hit(effect, amplifier, ticks)` |
 | `register_carried_effect(CarriedEffect)` | `CarriedEffect::new(mod_id, items, place, effect)`, `.amplifier(u8)`, `.setting(key)`. `Place::MainHand`, `OffHand`, `Hotbar` (includes the off hand), `Worn`, `AllWorn` |
 
 Details worth knowing:
@@ -121,8 +121,9 @@ Details worth knowing:
   the 64x32 layout of that mob. The glowing texture holds only the glowing pixels.
 - **A look needs an entity type of yours.** The library matches the type id the game reports, so
   it is for types your content mod adds (`horizon/entity_type/`), not for single vanilla mobs.
-- **`fire_proof` cancels burning damage.** It keeps a copy of an undead mob alive in daylight, but
-  the flames are still drawn. Horizon has no hook at `fdc87ae` to stop the sun lighting it.
+- **`no_sunburn` is for copies of undead mobs** (a zombie template): daylight no longer lights
+  them. Other fire still does. **`fire_proof`** cancels burning damage from any source; the
+  flames are still drawn when something lights the mob.
 - **Hit effects reach players only**, one tick after the hit, and only for a mob's own blow.
 - **Carried effects** are given for 16 seconds and renewed every 2, without particles, and taken
   away the tick the item leaves its place. The strongest level wins when two rules give the same
@@ -144,27 +145,44 @@ built in code rather than taken from vanilla.
 | Game data | 26.3 |
 | horizon-mixins | `e8cd0aa38cffef49cb2e088ef716baa107148c02` |
 
-The library uses only Horizon's catalog hooks (`mods`, `settings`, `settings_click`, `visuals`,
+The library uses Horizon's catalog hooks (`mods`, `settings`, `settings_click`, `visuals`,
 `mob_submit`, `living_conversion_pre`, `living_incoming_damage_v3`, `player_tick`) and `Host`
-helpers, with no mixin injections. It is pinned to one Horizon commit for now.
+helpers, plus one mixin injection of its own: `no_sunburn` hooks the start of
+`mobs::ai::burn_undead`, which no catalog hook reaches. That raw target pins the library to one
+Horizon commit.
 
 ## Build, check and package
 
 ```sh
 cargo test                                   # the logic, without the game
-HORIZON_SRC=<horizon checkout> tools/check.sh   # type-check against Horizon, as the launcher links it
+HORIZON_SRC=<horizon checkout> tools/check.sh   # type-check against Horizon, staged as the launcher stages it
 python3 tools/package.py                     # dist/armory_lib-<version>.hnmod and SHA256SUMS.txt
 cargo horizon-mod check dist/armory_lib-<version>.hnmod   # Horizon's own package check
 ```
 
-`tools/check.sh` adds the library to the checkout's workspace, so give it a copy you don't mind
-changing. `tools/gen_icon.py` redraws the icon. Releases are signed as described in
+`tools/check.sh` needs `horizon-mixins` on your PATH at the commit above. It leaves the checkout
+alone and writes its staged copy under `target/`. `tools/gen_icon.py` redraws the icon. Releases are signed as described in
 [docs/SIGNING.md](docs/SIGNING.md).
+
+## Releases
+
+Every update gets a GitHub release. Pushing a version tag makes it
+(`.github/workflows/release.yml`): the workflow rebuilds the package, checks it against `dist/`
+and attaches `armory_lib-<version>.hnmod`, its checksum and, once committed, its signature.
+
+```sh
+git tag v0.1.0-pre.1 && git push origin v0.1.0-pre.1   # a pre-release: a build still being tested
+git tag v0.1.0 && git push origin v0.1.0               # the full release, after it has been played
+```
+
+Only full releases are meant for the Horizon mod browser. A published version never changes: fix
+it with a new version number.
 
 ## Repository map
 
 - `mixins/armory_lib/`: the bundle the launcher builds. `api/src/lib.rs` holds the hooks,
-  `api/src/logic.rs` the logic and its tests.
+  `api/src/logic.rs` the logic and its tests. `bridge.rs` and `sunburn.rs` are the mixin half
+  of `no_sunburn`.
 - `tools/`: packaging, the type-check script and the icon generator
 - `docs/`: the icon and the signing guide
 - `dist/`: the latest built package and its checksum

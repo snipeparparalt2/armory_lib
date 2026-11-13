@@ -1,1 +1,1 @@
-88c6c7056e29f7e2f88358eaa9cb0c9f4b3491ca794c4ec46ecbef67544d3d20  armory_lib-0.1.0.hnmod
+6d38a36d9cc1e3d5cc20ab1d9fc1d8aa551ccd853d7e9b5d6cb0d5ad9253cbcd  armory_lib-0.1.0.hnmod

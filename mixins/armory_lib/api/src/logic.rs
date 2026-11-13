@@ -369,8 +369,10 @@ pub struct MobRules {
     /// It keeps its type when its template would turn into another (a zombie copy under
     /// water stays what it is).
     pub no_conversion: bool,
-    /// Burning does it no harm (`minecraft:on_fire` and `minecraft:in_fire` damage), so
-    /// daylight can't kill a copy of an undead mob. It can still be seen burning.
+    /// Daylight doesn't set it alight, as it does its undead template.
+    pub no_sunburn: bool,
+    /// Burning does it no harm (`minecraft:on_fire` and `minecraft:in_fire` damage). It can
+    /// still be seen burning when something else lights it.
     pub fire_proof: bool,
     pub on_hit: Vec<HitEffect>,
 }
@@ -381,12 +383,17 @@ impl MobRules {
             mod_id: mod_id.into(),
             kind: kind.into(),
             no_conversion: false,
+            no_sunburn: false,
             fire_proof: false,
             on_hit: Vec::new(),
         }
     }
     pub fn no_conversion(mut self) -> Self {
         self.no_conversion = true;
+        self
+    }
+    pub fn no_sunburn(mut self) -> Self {
+        self.no_sunburn = true;
         self
     }
     pub fn fire_proof(mut self) -> Self {
@@ -649,8 +656,9 @@ mod tests {
         assert!(is_burning("minecraft:on_fire") && is_burning("minecraft:in_fire"));
         assert!(!is_burning("minecraft:lava"));
         assert!(is_melee("minecraft:mob_attack") && !is_melee("minecraft:arrow"));
-        let r = MobRules::new("m", "m:x").no_conversion().fire_proof().on_hit("minecraft:slowness", 1, 60);
-        assert!(r.no_conversion && r.fire_proof && r.on_hit.len() == 1);
+        let r = MobRules::new("m", "m:x").no_conversion().no_sunburn().fire_proof().on_hit("minecraft:slowness", 1, 60);
+        assert!(r.no_conversion && r.no_sunburn && r.fire_proof && r.on_hit.len() == 1);
+        assert!(!MobRules::new("m", "m:x").no_sunburn);
     }
 
     fn carried() -> Carried {

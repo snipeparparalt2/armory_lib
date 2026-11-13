@@ -1,7 +1,7 @@
 # Armory Lib: a native library mod (Horizon docs/native-mods.md, "Trait mods" and
-# "Dependencies between trait mods"). It has no mixin injections: everything is in the
-# `[api]` package, which the launcher links into the game. Other mods name it under
-# `[dependencies]` in their own horizon-mixin.toml and call its public functions.
+# "Dependencies between trait mods"). Everything is in the `[api]` package, which the
+# launcher links into the game. Other mods name it under `[dependencies]` in their own
+# horizon-mixin.toml and call its public functions.
 [mod]
 id = "armory_lib"
 version = "0.1.0"
@@ -11,3 +11,23 @@ horizon_revision = "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca"
 
 [api]
 path = "api"
+
+# The one place no catalog hook reaches: where daylight sets an undead mob alight
+# (vanilla's `Mob.burnUndead`), in the client library crate. `bridge.rs` is added there as
+# the public module `horizon_client::armory_lib_bridge`, which the `[api]` package fills with
+# the entity types to spare; `sunburn.rs` asks it and leaves such a mob unlit. A raw target,
+# so the library is pinned to the Horizon commit above.
+[[module]]
+id = "bridge"
+file = "crates/horizon-client/src/client_lib.rs"
+name = "armory_lib_bridge"
+source = "bridge.rs"
+visibility = "pub"
+
+[[injection]]
+id = "sunburn"
+target = "horizon_client_lib::mobs::ai::burn_undead"
+kind = "HEAD"
+cancellable = true
+helper = "sunburn.rs"
+bindings = [{ name = "mob", ty = "&crate::mobs::Mob", value = "&*m" }]

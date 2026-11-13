@@ -5,12 +5,14 @@
 //! the work each frame and tick:
 //!
 //! - [`register_mob_look`]: a mod entity type drawn with its own texture on a vanilla body.
-//! - [`register_mob_rules`]: no conversion, no harm from burning, effects on a hit.
+//! - [`register_mob_rules`]: no conversion, no burning in daylight, no harm from fire, effects
+//!   on a hit.
 //! - [`register_carried_effect`]: an effect while an item is held, in the hotbar or worn.
 //! - [`register_gear_light`]: items that light the world in their colour.
 //! - [`register_page`]: a row in Options > Mods with one switch per feature; [`switch`] reads one.
 //!
-//! It uses only Horizon's catalog hooks and `Host`, so it has no mixin injections.
+//! It uses Horizon's catalog hooks and `Host`, and one mixin injection of its own (the
+//! daylight burn, which no catalog hook reaches; see `../../bridge.rs`).
 #![forbid(unsafe_code)]
 
 mod logic;
@@ -65,7 +67,21 @@ pub fn register_mob_look(look: MobLook) {
 
 /// Sets the rules of entity type `rules.kind`. A later registration replaces them.
 pub fn register_mob_rules(rules: MobRules) {
-    registry().rules.insert(rules.kind.clone(), rules);
+    let mut r = registry();
+    r.rules.insert(rules.kind.clone(), rules);
+    spare_from_sun(&r.rules, |_| true);
+}
+
+/// Tells the bridge which types daylight must not light: those with `no_sunburn` whose
+/// mod is `on`.
+fn spare_from_sun(rules: &HashMap<String, MobRules>, on: impl Fn(&str) -> bool) {
+    let mut kinds: Vec<String> = rules
+        .values()
+        .filter(|r| r.no_sunburn && on(&r.mod_id))
+        .map(|r| r.kind.clone())
+        .collect();
+    kinds.sort();
+    horizon_client::armory_lib_bridge::set_no_sunburn(kinds);
 }
 
 /// Adds an effect a player has while carrying an item.
@@ -431,6 +447,7 @@ impl Hooks for Lib {
                 on.insert(mod_id.clone(), host.on(mod_id));
             }
         }
+        spare_from_sun(&rules, |mod_id| host.on(mod_id));
 
         // Hits on this player, now that there is a host to ask who dealt them.
         let mine: Vec<u32> = {
