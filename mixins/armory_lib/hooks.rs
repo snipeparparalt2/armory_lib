@@ -197,6 +197,7 @@ fn load(host: &dyn Host) {
         problems.extend(super::armory_lib_souls_logic::read(&id, &file));
 
         // ---- Batch C: creatures and bosses (read here) ----
+        problems.extend(super::armory_lib_bosses_logic::read(&id, &file));
 
         // ---- Batch C: citadel, door and map scrap (read here) ----
 

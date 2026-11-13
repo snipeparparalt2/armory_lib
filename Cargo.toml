@@ -44,6 +44,10 @@ name = "souls"
 path = "mixins/armory_lib/souls_logic.rs"
 
 # ---- Batch C: creatures and bosses ----
+# Bosses: their bars, phases, blows and triggers from the mods' files, and the sums.
+[[test]]
+name = "bosses"
+path = "mixins/armory_lib/bosses_logic.rs"
 
 # ---- Batch C: citadel, door and map scrap ----
 
