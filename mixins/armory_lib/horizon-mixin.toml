@@ -648,4 +648,93 @@ bindings = [
 
 # ---- Batch C: creatures and bosses ----
 
+# `bosses_logic.rs`: the bosses, their triggers and hovering creatures read from the mods' files,
+# and the sums, with nothing from the game in it (`cargo test` runs it as the `bosses` test).
+[[module]]
+id = "bosses_logic"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_bosses_logic"
+source = "bosses_logic.rs"
+
+# `bosses.rs`: seals and altars that raise bosses, their bars, phases, blows and experience, the
+# music of a fight, hovering creatures.
+[[module]]
+id = "bosses"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_bosses"
+source = "bosses.rs"
+
+# Each player's tick: the blows they took from bosses, the bosses near them, the seals near them.
+[[injection]]
+id = "boss_player_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_player_tick"
+helper = "boss_player_tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+# A blow's damage is done. Unlike `native_living_incoming_damage_v3`, it fires with no trait mod
+# installed.
+[[injection]]
+id = "boss_damage_post"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_damage_post"
+helper = "boss_damage_post.rs"
+bindings = [
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
+  { name = "damage_type", ty = "&str", value = "damage_type" },
+  { name = "causing", ty = "i32", value = "causing" },
+  { name = "amount", ty = "f32", value = "amount" },
+]
+
+# A mob's loot: a boss drops its experience with it.
+[[injection]]
+id = "boss_loot_drops"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_loot_drops"
+helper = "boss_loot_drops.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "context", ty = "&horizon_client::mod_api::NativeLootDrops<'_>", value = "context" },
+]
+
+# An item used on a block: an altar's item raises its boss.
+[[injection]]
+id = "boss_altar"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"
+helper = "boss_altar.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
+
+# The client's music each tick: a boss fight's.
+[[injection]]
+id = "boss_music"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_music"
+helper = "boss_music.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "music", ty = "&mut Option<horizon_client::music::Music>", value = "&mut *music" },
+]
+
+# A mob drawn: a hovering creature is lifted first, so it runs before the look (`mob_submit`).
+[[injection]]
+id = "boss_hover"
+kind = "HEAD"
+priority = 1
+target = "horizon_client::game::native_hooks::Game<'_>::native_mob_submit"
+helper = "boss_hover.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "mob", ty = "&crate::game::NativeMobRender<'_>", value = "mob" },
+  { name = "draw", ty = "&mut crate::game::BlockEntityDraw", value = "&mut *draw" },
+]
+
 # ---- Batch C: citadel, door and map scrap ----

@@ -195,6 +195,7 @@ fn load(host: &dyn Host) {
         // ---- Batch C: soul pool and charged attacks (read here) ----
 
         // ---- Batch C: creatures and bosses (read here) ----
+        problems.extend(super::armory_lib_bosses_logic::read(&id, &file));
 
         // ---- Batch C: citadel, door and map scrap (read here) ----
 
