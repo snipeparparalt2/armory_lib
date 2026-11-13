@@ -32,6 +32,11 @@ path = "mixins/armory_lib/trinkets_logic.rs"
 
 # ---- Batch C: soul forge and upgrades ----
 
+# The soul forge and its upgrades: what the mods declare for them, the forge's rule, the sums.
+[[test]]
+name = "forge"
+path = "mixins/armory_lib/forge_logic.rs"
+
 # ---- Batch C: soul pool and charged attacks ----
 
 # ---- Batch C: creatures and bosses ----
