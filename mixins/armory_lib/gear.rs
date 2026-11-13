@@ -1,13 +1,15 @@
-// Gear that does things: what armour set bonuses, tool abilities, harvest sweeps and weapon
-// effects read and change in the game. Added to the game as `game::armory_lib_gear`. Which
+// Gear and creatures that do things: what armour set bonuses, tool abilities, harvest sweeps,
+// weapon effects, companions, rare variants and burning blows read and change in the game. Added to the game as `game::armory_lib_gear`. Which
 // items do what comes from the mods' own files, kept in `armory_lib_bridge` (bridge.rs) with
 // the decisions. Everything here runs on the server (single player's server thread, a LAN
 // host, a dedicated server), inside the hooks named in each function.
 use crate::game::Game;
+use crate::game::native_mobs::NativeSpawn;
 use crate::game::native_player_state::NativeEffect;
 use horizon_client::armory_lib_bridge as m;
 use horizon_client::items::ItemStack;
 use horizon_client::mod_api::NativeLootDrops;
+use horizon_client::particles::ParticleOptions;
 use horizon_world::player_inventory::EquipmentSlot;
 use horizon_world::registry::BlockStateId;
 
@@ -68,6 +70,13 @@ pub(super) fn on_player_tick(game: &mut Game<'_>) {
     for splash in m::take_splashes(me.uuid) {
         deal_splash(game, &me.dimension, me.entity_id, &splash);
     }
+    // A burning blow they took (`hooks.rs` queued it this tick, its mob's rule in force).
+    if let Some(ticks) = m::take_ignite(me.uuid)
+        && let Some(body) = game.player.as_mut()
+    {
+        body.fire_ticks = body.fire_ticks.max(ticks);
+    }
+    sweep(game, &me.dimension);
 }
 
 fn effect(id: &str, amplifier: u8) -> NativeEffect {
@@ -315,11 +324,218 @@ fn block_name(game: &Game<'_>, at: [i32; 3]) -> String {
     game.native_block(at)
 }
 
+// ---- Companions and rare variants -------------------------------------------------------
+
+/// The `SoundSource` ordinal of creatures that aren't hostile.
+const NEUTRAL: usize = 6;
+
+/// Once a second in each dimension, from the first player tick there: companions get their
+/// state from their tags (or keep their tags in step with it) and their melee damage; rare
+/// variants drop their item now and then.
+fn sweep(game: &mut Game<'_>, dimension: &str) {
+    let gear = m::gear();
+    if (gear.companions.is_empty() && gear.variants.is_empty()) || !game.native_authoritative() {
+        return;
+    }
+    let Some(clock) = game.native_clock() else {
+        return;
+    };
+    let sweep = clock.game_time.div_euclid(20);
+    if !m::start_sweep(dimension, sweep) {
+        return;
+    }
+    let found: Vec<(u32, String, [f64; 3])> = game
+        .mobs
+        .iter()
+        .filter(|mob| !mob.removed && mob.alive())
+        .filter(|mob| gear.companion(&mob.kind.id).is_some() || gear.has_variants(&mob.kind.id))
+        .map(|mob| (mob.id, mob.kind.id.clone(), [mob.position.x, mob.position.y, mob.position.z]))
+        .collect();
+    for (id, kind, at) in found {
+        if let Some(c) = gear.companion(&kind)
+            && on(game, &c.mod_id, c.setting.as_deref())
+        {
+            keep_companion(game, dimension, id, c);
+        }
+        if !gear.has_variants(&kind) {
+            continue;
+        }
+        let uuid = m::uuid_from_words(game.uuid_for(id));
+        let Some(v) = gear.variant_of(&kind, uuid) else {
+            continue;
+        };
+        if let Some(item) = &v.drop
+            && m::drops_now(uuid, &v.name, v.every_ticks, sweep)
+            && on(game, &v.mod_id, v.setting.as_deref())
+        {
+            let block = at.map(|c| c.floor() as i32);
+            game.pop_resource(block, ItemStack::new(item, 1));
+            game.native_play_sound_in_place("minecraft:entity.chicken.egg", at, NEUTRAL, 1.0, 1.0);
+        }
+    }
+}
+
+/// A companion's tame state, owner and sitting from its tags (saved with it) the first time
+/// it is seen, its sitting into its tags after that, and its melee damage.
+fn keep_companion(game: &mut Game<'_>, dimension: &str, id: u32, c: &m::CompanionDef) {
+    let Some(handle) = game.native_entity(id) else {
+        return;
+    };
+    let tags = game.native_entity_tags(handle).unwrap_or_default();
+    let owner = m::owner_from_tags(&tags);
+    let tagged_sitting = tags.iter().any(|t| t == m::SITTING_TAG);
+    let first = m::first_sight(dimension, id);
+    let Some(mob) = game.mobs.iter_mut().find(|mob| mob.id == id) else {
+        return;
+    };
+    mob.extra.tame = owner.is_some();
+    mob.extra.owner = owner.map(m::uuid_words);
+    if first || owner.is_none() {
+        mob.extra.sitting = owner.is_some() && tagged_sitting;
+    }
+    if mob.attrs.attack_damage < c.attack_damage {
+        mob.attrs.attack_damage = c.attack_damage;
+    }
+    let sitting = mob.extra.sitting;
+    if sitting != tagged_sitting {
+        if sitting {
+            game.native_entity_add_tag(handle, m::SITTING_TAG);
+        } else {
+            game.native_entity_remove_tag(handle, m::SITTING_TAG);
+        }
+    }
+}
+
+/// `native_interact_entity`: a right click on a companion, with the clicking player swapped
+/// in. Its item tames a wild one (one used each try, at the companion's chance); its owner's
+/// healing item heals it, anything else tells it to sit or stand. A companion's click is
+/// always taken, so a copy of the wandering trader never opens a trader's menu.
+pub(super) fn on_interact_entity(
+    game: &mut Game<'_>,
+    entity: i32,
+    kind: &str,
+    stack: Option<&ItemStack>,
+    claimed: &mut bool,
+) {
+    if *claimed || !game.native_authoritative() {
+        return;
+    }
+    let gear = m::gear();
+    let Some(c) = gear.companion(kind) else {
+        return;
+    };
+    let (Ok(id), Some(me)) = (u32::try_from(entity), game.native_acting_player()) else {
+        return;
+    };
+    if !on(game, &c.mod_id, c.setting.as_deref()) {
+        return;
+    }
+    let Some(handle) = game.native_entity(id) else {
+        return;
+    };
+    *claimed = true;
+    let owner = m::owner_from_tags(&game.native_entity_tags(handle).unwrap_or_default());
+    let item = stack.map(|s| s.item.to_string()).unwrap_or_default();
+    let Some(at) = game
+        .mobs
+        .iter()
+        .find(|mob| mob.id == id)
+        .map(|mob| [mob.position.x, mob.position.y + 0.5, mob.position.z])
+    else {
+        return;
+    };
+    match owner {
+        None if c.tame_with.contains(&item) => {
+            game.consume_held();
+            let dimension = game.dim.id().to_owned();
+            let roll = game.native_level_random(&dimension).map_or(1.0, |r| {
+                use horizon_core::random::RandomSource;
+                r.next_float()
+            });
+            if roll < c.tame_chance {
+                // `TamableAnimal.tame` and a wolf's `setOrderedToSit(true)`.
+                game.native_entity_add_tag(handle, &m::owner_tag(me.uuid));
+                game.native_entity_add_tag(handle, m::SITTING_TAG);
+                if let Some(mob) = game.mobs.iter_mut().find(|mob| mob.id == id) {
+                    mob.extra.tame = true;
+                    mob.extra.owner = Some(m::uuid_words(me.uuid));
+                    mob.extra.sitting = true;
+                    mob.ai.nav.stop();
+                    mob.ai.target = None;
+                }
+                puff(game, "minecraft:heart", at);
+            } else {
+                puff(game, "minecraft:smoke", at);
+            }
+        }
+        Some(o) if o == me.uuid => {
+            let hurt = game
+                .mobs
+                .iter()
+                .find(|mob| mob.id == id)
+                .is_some_and(|mob| mob.health < mob.attrs.max_health);
+            if hurt && c.heal_with.contains(&item) {
+                game.consume_held();
+                if let Some(mob) = game.mobs.iter_mut().find(|mob| mob.id == id) {
+                    mob.health = (mob.health + c.heal).min(mob.attrs.max_health);
+                }
+                puff(game, "minecraft:heart", at);
+            } else if let Some(mob) = game.mobs.iter_mut().find(|mob| mob.id == id) {
+                // `TamableAnimal.setOrderedToSit`, as a wolf's owner's click does.
+                mob.extra.sitting = !mob.extra.sitting;
+                mob.ai.nav.stop();
+                mob.ai.target = None;
+                let sitting = mob.extra.sitting;
+                if sitting {
+                    game.native_entity_add_tag(handle, m::SITTING_TAG);
+                } else {
+                    game.native_entity_remove_tag(handle, m::SITTING_TAG);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Seven particles of `name` around `at`, as a taming try shows them.
+fn puff(game: &mut Game<'_>, name: &str, at: [f64; 3]) {
+    let options = ParticleOptions::named(name);
+    game.native_send_particles_in_place(&options, None, at, [0.4, 0.4, 0.4], 0.02, 7);
+}
+
+/// Its summoning item used on a block: a companion appears on top of it, already its
+/// user's, and the item is used up.
+fn summon(game: &mut Game<'_>, c: &m::CompanionDef, pos: [i32; 3], claimed: &mut bool) {
+    let Some(me) = game.native_acting_player() else {
+        return;
+    };
+    let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 1.0, f64::from(pos[2]) + 0.5];
+    let dimension = game.dim.id().to_owned();
+    let Some(id) = game.native_spawn_mob(&dimension, &c.kind, at, &NativeSpawn::default()) else {
+        return;
+    };
+    *claimed = true;
+    game.consume_held();
+    if let Some(handle) = game.native_entity(id) {
+        game.native_entity_add_tag(handle, &m::owner_tag(me.uuid));
+    }
+    if let Some(mob) = game.mobs.iter_mut().find(|mob| mob.id == id) {
+        mob.extra.tame = true;
+        mob.extra.owner = Some(m::uuid_words(me.uuid));
+        mob.attrs.attack_damage = mob.attrs.attack_damage.max(c.attack_damage);
+        mob.persistent = true;
+    }
+    m::first_sight(&dimension, id);
+    game.native_play_sound_in_place("minecraft:entity.iron_golem.repair", at, NEUTRAL, 1.0, 0.8);
+    puff(game, "minecraft:cloud", [at[0], at[1] + 0.5, at[2]]);
+}
+
 // ---- Harvest sweep ---------------------------------------------------------------------
 
-/// `native_use_item_on`: a right click with `stack` on the block at `pos`. A hoe with a
-/// harvest rule on a grown crop harvests and replants the grown crops around it, one
-/// durability each, as long as the hoe has more than one point left.
+/// `native_use_item_on`: a right click with `stack` on the block at `pos`. A companion's
+/// summoning item summons it. A hoe with a harvest rule on a grown crop harvests and replants
+/// the grown crops around it, one durability each, as long as the hoe has more than one
+/// point left.
 pub(super) fn on_use_item_on(
     game: &mut Game<'_>,
     stack: &ItemStack,
@@ -330,6 +546,12 @@ pub(super) fn on_use_item_on(
         return;
     }
     let gear = m::gear();
+    if let Some(c) = gear.summoned_by(&stack.item) {
+        if on(game, &c.mod_id, c.setting.as_deref()) {
+            summon(game, c, pos, claimed);
+        }
+        return;
+    }
     let Some(rule) = gear.harvest(&stack.item) else {
         return;
     };

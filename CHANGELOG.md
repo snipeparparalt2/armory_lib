@@ -21,6 +21,13 @@ First version, for Horizon `fdc87ae` (Nightly 2026-11-08, game data 26.3).
   held, worn or lying on the ground.
 - Settings pages: `register_page` adds a row to Options > Mods with one switch per feature;
   `switch` reads one.
+- Companions (`companions`): a wandering-trader copy gets a tame wolf's goals and melee damage;
+  an item tames it (at a chance) or summons it, its owner heals it or makes it sit. Owner and
+  sitting are saved as entity tags.
+- Rare variants (`mob_variants`): one mob in N, picked from its UUID, drawn with its own look and
+  dropping an item now and then (a gold chicken laying nuggets).
+- Mob sounds (`mob_sounds`): vanilla sound events in place of a type's own, at a pitch.
+- Burning blows: a mob rule's `ignite_seconds` sets the player it hits alight.
 - A plain mixin bundle, with no `[api]` package: launchers newer than Horizon `fdc87ae` build it
   (a trait mod made them generate an executable for a newer Horizon, which failed with
   ``cannot find type `GameAllocator` in crate `horizon_threads` ``). The `register_*` functions

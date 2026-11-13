@@ -375,6 +375,8 @@ pub struct MobRules {
     /// still be seen burning when something else lights it.
     pub fire_proof: bool,
     pub on_hit: Vec<HitEffect>,
+    /// Its own blow sets a player alight for this many ticks (0 for none).
+    pub ignite_ticks: i32,
 }
 
 impl MobRules {
@@ -386,6 +388,7 @@ impl MobRules {
             no_sunburn: false,
             fire_proof: false,
             on_hit: Vec::new(),
+            ignite_ticks: 0,
         }
     }
     pub fn no_conversion(mut self) -> Self {
@@ -399,6 +402,15 @@ impl MobRules {
     pub fn fire_proof(mut self) -> Self {
         self.fire_proof = true;
         self
+    }
+    /// Its blow sets a player alight for `ticks` (20 a second).
+    pub fn ignites(mut self, ticks: i32) -> Self {
+        self.ignite_ticks = ticks.max(0);
+        self
+    }
+    /// Whether its blows do anything to a player.
+    pub fn hits_do_something(&self) -> bool {
+        !self.on_hit.is_empty() || self.ignite_ticks > 0
     }
     pub fn on_hit(mut self, effect: &str, amplifier: u8, duration: i32) -> Self {
         self.on_hit.push(HitEffect {
@@ -554,6 +566,8 @@ pub struct Declared {
     pub looks: Vec<MobLook>,
     pub rules: Vec<MobRules>,
     pub carried: Vec<CarriedEffect>,
+    /// The looks of rare variants (`mob_variants`), by variant name (`mymod:gold_chicken`).
+    pub variant_looks: Vec<(String, MobLook)>,
     /// What could not be used, one line each, for the log.
     pub problems: Vec<String>,
 }
@@ -582,6 +596,45 @@ pub fn colour(value: Option<&serde_json::Value>) -> Option<u32> {
             (hex.len() == 6).then(|| u32::from_str_radix(hex, 16).ok()).flatten()
         }
         other => other.as_u64().filter(|n| *n <= 0xff_ffff).map(|n| n as u32),
+    }
+}
+
+/// A look (`mob_looks`, or a variant's `look`) for entity type `kind`: `texture`, and
+/// `rig` (else `default_rig`), `emissive` and `scale`.
+fn read_look(
+    mod_id: &str,
+    kind: &str,
+    look: &serde_json::Value,
+    default_rig: &str,
+    problems: &mut Vec<String>,
+) -> Option<MobLook> {
+    let Some(texture) = text(look, "texture") else {
+        problems.push(format!("{mod_id}: the look of {kind} needs a texture"));
+        return None;
+    };
+    let rig = match look.get("rig").and_then(|v| v.as_str()).unwrap_or(default_rig) {
+        "zombie" => Rig::zombie(),
+        "humanoid" => Rig::humanoid(),
+        "wolf" => Rig::wolf(),
+        "chicken" => Rig::chicken(),
+        other => {
+            problems.push(format!("{mod_id}: unknown rig {other:?} for {kind}"));
+            return None;
+        }
+    };
+    let mut made = MobLook::new(mod_id, kind, rig, &texture);
+    made.emissive = text(look, "emissive");
+    made.scale = look.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0).clamp(0.1, 8.0) as f32;
+    Some(made)
+}
+
+/// The rig a vanilla type's variant is drawn on unless its look names one.
+fn rig_name_of(kind: &str) -> &'static str {
+    match kind {
+        "minecraft:wolf" => "wolf",
+        "minecraft:chicken" => "chicken",
+        "minecraft:zombie" | "minecraft:husk" | "minecraft:drowned" => "zombie",
+        _ => "humanoid",
     }
 }
 
@@ -627,24 +680,24 @@ pub fn read_file(mod_id: &str, file: &serde_json::Value) -> Declared {
         }
     }
     for look in list(file, "mob_looks") {
-        let (Some(kind), Some(texture)) = (text(look, "kind"), text(look, "texture")) else {
+        let Some(kind) = text(look, "kind") else {
             out.problems.push(format!("{mod_id}: a mob_looks entry needs kind and texture"));
             continue;
         };
-        let rig = match look.get("rig").and_then(|v| v.as_str()).unwrap_or("zombie") {
-            "zombie" => Rig::zombie(),
-            "humanoid" => Rig::humanoid(),
-            "wolf" => Rig::wolf(),
-            "chicken" => Rig::chicken(),
-            other => {
-                out.problems.push(format!("{mod_id}: unknown rig {other:?} for {kind}"));
-                continue;
-            }
+        if let Some(made) = read_look(mod_id, &kind, look, "zombie", &mut out.problems) {
+            out.looks.push(made);
+        }
+    }
+    for variant in list(file, "mob_variants") {
+        let (Some(kind), Some(name), Some(look)) =
+            (text(variant, "kind"), text(variant, "name"), variant.get("look"))
+        else {
+            continue; // the bridge reports what a variant lacks
         };
-        let mut made = MobLook::new(mod_id, &kind, rig, &texture);
-        made.emissive = text(look, "emissive");
-        made.scale = look.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0).clamp(0.1, 8.0) as f32;
-        out.looks.push(made);
+        let default_rig = rig_name_of(&kind);
+        if let Some(made) = read_look(mod_id, &kind, look, default_rig, &mut out.problems) {
+            out.variant_looks.push((format!("{mod_id}:{name}"), made));
+        }
     }
     for rule in list(file, "mob_rules") {
         let Some(kind) = text(rule, "kind") else {
@@ -655,6 +708,9 @@ pub fn read_file(mod_id: &str, file: &serde_json::Value) -> Declared {
         made.no_conversion = flag(rule, "no_conversion");
         made.no_sunburn = flag(rule, "no_sunburn");
         made.fire_proof = flag(rule, "fire_proof");
+        if let Some(seconds) = rule.get("ignite_seconds").and_then(|v| v.as_f64()) {
+            made.ignite_ticks = (seconds.clamp(0.0, 600.0) * 20.0).round() as i32;
+        }
         for hit in list(rule, "on_hit") {
             let Some(effect) = text(hit, "effect") else {
                 continue;
@@ -900,6 +956,30 @@ mod tests {
         assert_eq!(d.rules[0].on_hit[0], HitEffect { effect: "minecraft:slowness".into(), amplifier: 1, duration: 100 });
         assert_eq!(d.carried.len(), 2);
         assert_eq!((d.carried[1].place, d.carried[1].amplifier), (Place::AllWorn, 1));
+    }
+
+    #[test]
+    fn burning_blows_and_variant_looks() {
+        let file = serde_json::json!({
+            "mob_rules": [
+                {"kind": "m:brute", "ignite_seconds": 4},
+                {"kind": "m:calm"}
+            ],
+            "mob_variants": [
+                {"kind": "minecraft:chicken", "name": "gold", "look": {"texture": "m:entity/gold_chicken"}},
+                {"kind": "minecraft:cow", "name": "plain"},
+                {"kind": "minecraft:pig", "name": "odd", "look": {"rig": "spider", "texture": "m:x"}}
+            ]
+        });
+        let d = read_file("m", &file);
+        assert_eq!(d.problems.len(), 1, "{:?}", d.problems);
+        assert_eq!(d.rules[0].ignite_ticks, 80);
+        assert!(d.rules[0].hits_do_something() && !d.rules[1].hits_do_something());
+        assert_eq!(d.variant_looks.len(), 1);
+        let (name, look) = &d.variant_looks[0];
+        assert_eq!((name.as_str(), look.kind.as_str()), ("m:gold", "minecraft:chicken"));
+        assert_eq!(look.rig.layer, Rig::chicken().layer);
+        assert_eq!(MobRules::new("m", "m:x").ignites(-5).ignite_ticks, 0);
     }
 
     #[test]

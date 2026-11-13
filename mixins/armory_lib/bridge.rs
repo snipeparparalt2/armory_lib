@@ -1,11 +1,12 @@
-// Armory Lib's half inside the game's client library (added there as the public module
-// `armory_lib_bridge`, so the `[api]` package reaches it as `horizon_client::armory_lib_bridge`
-// and the mixin code in `gear.rs` as the same path). It holds what both sides share, with no
-// game in it:
+// Armory Lib's part inside the game's client library (added there as the public module
+// `armory_lib_bridge`, reached as `horizon_client::armory_lib_bridge` from the game's modules
+// `hooks.rs` and `gear.rs`, and from the mob code in `goals.rs` and `sunburn.rs`). It holds
+// what they all share, with no game in it:
 //
 // - the entity types daylight must not set alight (`sunburn.rs` reads it);
 // - the gear rules mods declare in their `data/<mod>/armory_lib.json`: armour set bonuses,
-//   tool abilities, harvest sweeps and weapon effects, and the logic `gear.rs` runs them with;
+//   tool abilities, harvest sweeps, weapon effects, companions, rare variants and mob
+//   sounds, and the logic the game's modules run them with;
 // - the settings switches as the server's hooks last read them.
 //
 // It is also a test target of the repository's Cargo package: `cargo test` runs it alone.
@@ -59,8 +60,8 @@ pub fn content_mod_ids(dir: &std::path::Path) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------------------
-// Switches. A rule may name a switch of its mod's settings page; the page is drawn by the
-// `[api]` package and kept by the game in one file per switch. The server's hooks read the
+// Switches. A rule may name a switch of its mod's settings page; the page is drawn by
+// `hooks.rs` and kept by the game in one file per switch. The server's hooks read the
 // files through here, at most once a second.
 // ---------------------------------------------------------------------------------------
 
@@ -260,6 +261,43 @@ impl Default for WeaponDef {
     }
 }
 
+/// A mob type that can be tamed or summoned and then follows and fights for its owner
+/// (with a wolf's goals, set up in `goals.rs` as each one is made).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompanionDef {
+    pub mod_id: String,
+    pub setting: Option<String>,
+    /// The entity type, `mymod:hound`.
+    pub kind: String,
+    /// Items that tame it with a right click, one used each try.
+    pub tame_with: Vec<String>,
+    /// The chance one try tames it, 0 to 1.
+    pub tame_chance: f32,
+    /// An item that summons one, already tamed, where it is used on a block.
+    pub summon_with: Option<String>,
+    /// Items its owner heals it with, and how much each gives.
+    pub heal_with: Vec<String>,
+    pub heal: f32,
+    /// Its melee damage (a copy of a wandering trader has none of its own).
+    pub attack_damage: f32,
+}
+
+/// A rare variant of a mob type: one mob in `one_in`, picked from its UUID so every side
+/// agrees, drawn with its own look (`hooks.rs`) and maybe dropping an item now and then
+/// (`gear.rs`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantDef {
+    pub mod_id: String,
+    pub setting: Option<String>,
+    pub kind: String,
+    /// Its name, unique among a mod's variants: `gold_chicken`.
+    pub name: String,
+    pub one_in: u32,
+    /// An item it drops every `every_ticks` on average (0 for none).
+    pub drop: Option<String>,
+    pub every_ticks: u32,
+}
+
 /// Every mod's gear rules together.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Gear {
@@ -269,11 +307,29 @@ pub struct Gear {
     pub weapons: Vec<Arc<WeaponDef>>,
     /// Blocks that count as ores though no ore tag lists them.
     pub ores: Vec<String>,
+    pub companions: Vec<CompanionDef>,
+    pub variants: Vec<VariantDef>,
+    pub sounds: Vec<SoundsDef>,
+}
+
+/// A mob type's own sounds in place of its template's, and the pitch of its voice. The game
+/// plays a mob's sounds as `minecraft:` events (a content mod can't add those), so these are
+/// vanilla events without the namespace, pitched by `pitch` (a wolf's growl at 0.7 for a
+/// bigger beast).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SoundsDef {
+    pub mod_id: String,
+    pub kind: String,
+    pub ambient: Option<String>,
+    pub hurt: Option<String>,
+    pub death: Option<String>,
+    /// Times the game's own voice pitch (1 ± 0.2, a baby's higher), 0.5 to 2.
+    pub pitch: f32,
 }
 
 static GEAR: RwLock<Option<Arc<Gear>>> = RwLock::new(None);
 
-/// Replaces the gear rules (the `[api]` package, after it read the mods' files).
+/// Replaces the gear rules (`hooks.rs`, after it read the mods' files).
 pub fn set_gear(gear: Gear) {
     *GEAR.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(gear));
 }
@@ -308,6 +364,157 @@ impl Gear {
     }
     pub fn is_listed_ore(&self, block: &str) -> bool {
         self.ores.iter().any(|o| o == block)
+    }
+    pub fn companion(&self, kind: &str) -> Option<&CompanionDef> {
+        self.companions.iter().find(|c| c.kind == kind)
+    }
+    pub fn summoned_by(&self, item: &str) -> Option<&CompanionDef> {
+        self.companions.iter().find(|c| c.summon_with.as_deref() == Some(item))
+    }
+    /// The variant a mob of `kind` with `uuid` is, if any (the first that picks it).
+    pub fn variant_of(&self, kind: &str, uuid: u128) -> Option<&VariantDef> {
+        self.variants
+            .iter()
+            .find(|v| v.kind == kind && variant_hit(uuid, &v.name, v.one_in))
+    }
+    pub fn sounds_of(&self, kind: &str) -> Option<&SoundsDef> {
+        self.sounds.iter().find(|s| s.kind == kind)
+    }
+    pub fn has_variants(&self, kind: &str) -> bool {
+        self.variants.iter().any(|v| v.kind == kind)
+    }
+}
+
+// ---- Variants, companions and burning hits ---------------------------------------------
+
+/// A stable 64-bit mix of a UUID and a name (splitmix64 over FNV-1a), the same on every side.
+pub fn uuid_hash(uuid: u128, name: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in name.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    let mut z = h ^ (uuid as u64) ^ ((uuid >> 64) as u64).rotate_left(29);
+    z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// Whether the mob with `uuid` is variant `name`, one in `one_in`.
+pub fn variant_hit(uuid: u128, name: &str, one_in: u32) -> bool {
+    one_in > 0 && uuid_hash(uuid, name) % u64::from(one_in) == 0
+}
+
+/// Whether a variant drops its item in the sweep numbered `sweep` (one sweep a second, 20
+/// ticks): once every `every_ticks` on average, at a time of its own.
+pub fn drops_now(uuid: u128, name: &str, every_ticks: u32, sweep: i64) -> bool {
+    let period = i64::from((every_ticks / 20).max(1));
+    let offset = (uuid_hash(uuid, name) >> 16) as i64 % period;
+    (sweep + offset).rem_euclid(period) == 0
+}
+
+/// A mob sound event as the game keeps it, without its namespace: `minecraft:entity.x.y` and
+/// `entity.x.y` -> `entity.x.y`; none for another namespace or an empty name.
+pub fn sound_event(name: &str) -> Option<&str> {
+    let event = name.strip_prefix("minecraft:").unwrap_or(name);
+    (!event.is_empty() && !event.contains(':')).then_some(event)
+}
+
+/// `name` for as long as the game runs, as a mob type keeps its sound events. Each name is
+/// kept once, however often the files are read again.
+pub fn forever(name: &str) -> &'static str {
+    static KEPT: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    let mut kept = lock(&KEPT);
+    if let Some(found) = kept.iter().find(|k| **k == name) {
+        return found;
+    }
+    let made: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    kept.push(made);
+    made
+}
+
+/// A UUID as vanilla's four big-endian ints (`Owner`, `UUID` in saves).
+pub fn uuid_words(uuid: u128) -> [i32; 4] {
+    [(uuid >> 96) as u32 as i32, (uuid >> 64) as u32 as i32, (uuid >> 32) as u32 as i32, uuid as u32 as i32]
+}
+
+pub fn uuid_from_words(w: [i32; 4]) -> u128 {
+    w.iter().fold(0u128, |acc, &x| (acc << 32) | u128::from(x as u32))
+}
+
+/// The entity tag that keeps a companion's owner (tags are saved with every mob).
+pub const OWNER_TAG: &str = "armory_lib.owner.";
+pub const SITTING_TAG: &str = "armory_lib.sitting";
+
+pub fn owner_tag(uuid: u128) -> String {
+    format!("{OWNER_TAG}{uuid:032x}")
+}
+
+pub fn owner_from_tags<'a>(tags: impl IntoIterator<Item = &'a String>) -> Option<u128> {
+    tags.into_iter()
+        .find_map(|t| t.strip_prefix(OWNER_TAG))
+        .and_then(|hex| u128::from_str_radix(hex, 16).ok())
+}
+
+/// Players a mob's hit set alight, for their next player tick: (player, ticks).
+static IGNITE: Mutex<Vec<(u128, i32)>> = Mutex::new(Vec::new());
+
+pub fn queue_ignite(player: u128, ticks: i32) {
+    let mut all = lock(&IGNITE);
+    if all.len() >= 64 {
+        all.remove(0);
+    }
+    all.push((player, ticks));
+}
+
+/// The longest burn waiting for `player`.
+pub fn take_ignite(player: u128) -> Option<i32> {
+    let mut all = lock(&IGNITE);
+    let mine = all.iter().filter(|(p, _)| *p == player).map(|(_, t)| *t).max();
+    all.retain(|(p, _)| *p != player);
+    mine
+}
+
+/// The companions already seen this session, by dimension and id: the first time, their
+/// tags set their state; after that their state sets the tags, so a sitting companion the
+/// game stood up (it was hurt) stays up.
+static SEEN: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+
+/// Whether this is the first sight of companion `id` in `dimension` (noting it).
+pub fn first_sight(dimension: &str, id: u32) -> bool {
+    let mut seen = lock(&SEEN);
+    if seen.iter().any(|(d, i)| *i == id && d == dimension) {
+        return false;
+    }
+    if seen.len() >= 4096 {
+        seen.remove(0);
+    }
+    seen.push((dimension.to_owned(), id));
+    true
+}
+
+/// Forgets every sighting (a world opened: ids start again).
+pub fn forget_sightings() {
+    lock(&SEEN).clear();
+}
+
+/// The last sweep run in each dimension, so one sweep a second runs however many players
+/// tick there.
+static SWEEPS: Mutex<Vec<(String, i64)>> = Mutex::new(Vec::new());
+
+/// Whether sweep `sweep` should run now in `dimension` (true once per sweep).
+pub fn start_sweep(dimension: &str, sweep: i64) -> bool {
+    let mut all = lock(&SWEEPS);
+    match all.iter_mut().find(|(d, _)| d == dimension) {
+        Some((_, last)) if *last == sweep => false,
+        Some((_, last)) => {
+            *last = sweep;
+            true
+        }
+        None => {
+            all.push((dimension.to_owned(), sweep));
+            true
+        }
     }
 }
 
@@ -393,6 +600,63 @@ pub fn read_gear(mod_id: &str, file: &serde_json::Value, gear: &mut Gear) -> Vec
             items: strings(hoe.get("items")),
             radius: number(hoe, "radius").unwrap_or(1.0).clamp(1.0, 4.0) as i32,
         });
+    }
+    for c in entries(file, "companions") {
+        let Some(kind) = text(c, "kind") else {
+            problems.push(format!("{mod_id}: a companions entry needs kind"));
+            continue;
+        };
+        gear.companions.push(CompanionDef {
+            mod_id: mod_id.to_owned(),
+            setting: text(c, "setting"),
+            kind,
+            tame_with: strings(c.get("tame_with")),
+            tame_chance: number(c, "tame_chance").unwrap_or(0.33).clamp(0.0, 1.0) as f32,
+            summon_with: text(c, "summon_with"),
+            heal_with: strings(c.get("heal_with")),
+            heal: number(c, "heal").unwrap_or(4.0).clamp(0.0, 1024.0) as f32,
+            attack_damage: number(c, "attack_damage").unwrap_or(3.0).clamp(0.0, 1024.0) as f32,
+        });
+    }
+    for v in entries(file, "mob_variants") {
+        let (Some(kind), Some(name)) = (text(v, "kind"), text(v, "name")) else {
+            problems.push(format!("{mod_id}: a mob_variants entry needs kind and name"));
+            continue;
+        };
+        let drops = v.get("drops");
+        gear.variants.push(VariantDef {
+            mod_id: mod_id.to_owned(),
+            setting: text(v, "setting"),
+            kind,
+            name: format!("{mod_id}:{name}"),
+            one_in: number(v, "one_in").unwrap_or(50.0).clamp(1.0, 1_000_000.0) as u32,
+            drop: drops.and_then(|d| text(d, "item")),
+            every_ticks: drops
+                .and_then(|d| number(d, "every_ticks"))
+                .unwrap_or(6000.0)
+                .clamp(20.0, 10_000_000.0) as u32,
+        });
+    }
+    for s in entries(file, "mob_sounds") {
+        let Some(kind) = text(s, "kind") else {
+            problems.push(format!("{mod_id}: a mob_sounds entry needs kind"));
+            continue;
+        };
+        let mut event = |key: &str| {
+            let name = text(s, key)?;
+            match sound_event(&name) {
+                Some(event) => Some(event.to_owned()),
+                None => {
+                    problems.push(format!(
+                        "{mod_id}: {kind}'s {key} sound {name:?} must be a minecraft: event"
+                    ));
+                    None
+                }
+            }
+        };
+        let (ambient, hurt, death) = (event("ambient"), event("hurt"), event("death"));
+        let pitch = number(s, "pitch").unwrap_or(1.0).clamp(0.5, 2.0) as f32;
+        gear.sounds.push(SoundsDef { mod_id: mod_id.to_owned(), kind, ambient, hurt, death, pitch });
     }
     for weapon in entries(file, "weapons") {
         let splash = weapon.get("splash");
@@ -938,6 +1202,19 @@ mod tests {
         ],
         "ores": ["m:odd_ore_block"],
         "harvest": [{"items": ["m:hoe"], "radius": 1}, {"items": ["m:scythe"], "radius": 2}],
+        "companions": [
+            {"kind": "m:hound", "tame_with": ["m:meat"], "tame_chance": 0.5, "heal_with": ["m:meat"], "attack_damage": 4.0},
+            {"kind": "m:golem", "summon_with": "m:core", "attack_damage": 7.0},
+            {"tame_with": ["m:meat"]}
+        ],
+        "mob_sounds": [
+            {"kind": "m:hound", "ambient": "entity.wolf.growl", "hurt": "minecraft:entity.wolf.hurt", "death": "m:death", "pitch": 0.7},
+            {"ambient": "x"}
+        ],
+        "mob_variants": [
+            {"kind": "minecraft:chicken", "name": "gold", "one_in": 50, "drops": {"item": "minecraft:gold_nugget", "every_ticks": 6000}},
+            {"kind": "minecraft:cow", "name": "plain"}
+        ],
         "weapons": [
             {"items": ["m:dagger"], "backstab": 2.0},
             {"items": ["m:greatsword"], "splash": {"radius": 1.5, "share": 0.5}},
@@ -958,7 +1235,7 @@ mod tests {
     #[test]
     fn a_file_becomes_rules_and_says_what_it_could_not_use() {
         let (gear, problems) = gear_of_file();
-        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert_eq!(problems.len(), 5, "{problems:?}");
         assert_eq!((gear.sets.len(), gear.tools.len(), gear.harvests.len(), gear.weapons.len()), (3, 3, 2, 7));
         assert!(gear.sets.iter().all(|s| s.mod_id == "m"));
         assert_eq!(gear.sets[0].effects, vec![("minecraft:night_vision".to_owned(), 0), ("minecraft:speed".to_owned(), 1)]);
@@ -969,6 +1246,75 @@ mod tests {
         let mut empty = Gear::default();
         assert!(read_gear("m", &serde_json::json!({"tools": 3, "weapons": {}}), &mut empty).is_empty());
         assert_eq!(empty, Gear::default());
+    }
+
+    #[test]
+    fn mob_sounds() {
+        let (gear, _) = gear_of_file();
+        let s = gear.sounds_of("m:hound").unwrap();
+        assert_eq!(s.ambient.as_deref(), Some("entity.wolf.growl"));
+        assert_eq!(s.pitch, 0.7);
+        assert_eq!(s.hurt.as_deref(), Some("entity.wolf.hurt"));
+        assert_eq!(s.death, None);
+        assert_eq!(sound_event("minecraft:a.b"), Some("a.b"));
+        assert_eq!(sound_event("m:a"), None);
+        assert_eq!(sound_event(""), None);
+        let a = forever("entity.m.x");
+        assert!(std::ptr::eq(a, forever("entity.m.x")));
+    }
+
+    #[test]
+    fn companions_and_variants() {
+        let (gear, _) = gear_of_file();
+        let hound = gear.companion("m:hound").unwrap();
+        assert_eq!((hound.tame_chance, hound.attack_damage, hound.heal), (0.5, 4.0, 4.0));
+        assert_eq!(gear.summoned_by("m:core").map(|c| c.kind.as_str()), Some("m:golem"));
+        assert!(gear.summoned_by("m:meat").is_none() && gear.companion("minecraft:wolf").is_none());
+        let gold = &gear.variants[0];
+        assert_eq!((gold.name.as_str(), gold.one_in, gold.every_ticks), ("m:gold", 50, 6000));
+        assert_eq!(gold.drop.as_deref(), Some("minecraft:gold_nugget"));
+        assert!(gear.has_variants("minecraft:chicken") && !gear.has_variants("minecraft:pig"));
+        // About one chicken in fifty, the same answer every time.
+        let hits = (0..50_000u128).filter(|i| variant_hit(i.wrapping_mul(0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c834), "m:gold", 50)).count();
+        assert!((800..1200).contains(&hits), "{hits}");
+        let u = 0x1234_5678_9abc_def0_0fed_cba9_8765_4321u128;
+        assert_eq!(variant_hit(u, "m:gold", 50), variant_hit(u, "m:gold", 50));
+        assert_eq!(gear.variant_of("minecraft:chicken", u).is_some(), variant_hit(u, "m:gold", 50));
+        assert!(variant_hit(u, "anything", 1));
+        assert!(!variant_hit(u, "anything", 0));
+    }
+
+    #[test]
+    fn drops_once_per_period() {
+        let u = 77u128;
+        let n = (0..3000).filter(|s| drops_now(u, "m:gold", 6000, *s)).count();
+        assert_eq!(n, 10);                                 // 3000 sweeps / 300 per period
+        assert!((0..300).filter(|s| drops_now(u, "m:gold", 6000, *s)).count() == 1);
+    }
+
+    #[test]
+    fn owners_round_trip() {
+        let u = 0x0011_2233_4455_6677_8899_aabb_ccdd_eeffu128;
+        assert_eq!(uuid_from_words(uuid_words(u)), u);
+        assert_eq!(uuid_words(u)[0], 0x0011_2233);
+        let tags = vec!["other".to_string(), owner_tag(u)];
+        assert_eq!(owner_from_tags(&tags), Some(u));
+        assert_eq!(owner_from_tags(&vec!["armory_lib.owner.zz".to_string()]), None);
+    }
+
+    #[test]
+    fn burns_and_sweeps() {
+        queue_ignite(9, 40);
+        queue_ignite(9, 80);
+        queue_ignite(10, 20);
+        assert_eq!(take_ignite(9), Some(80));
+        assert_eq!(take_ignite(9), None);
+        assert_eq!(take_ignite(10), Some(20));
+        assert!(start_sweep("test:a", 1) && !start_sweep("test:a", 1));
+        assert!(first_sight("test:a", 4) && !first_sight("test:a", 4) && first_sight("test:b", 4));
+        forget_sightings();
+        assert!(first_sight("test:a", 4));
+        assert!(start_sweep("test:b", 1) && start_sweep("test:a", 2));
     }
 
     #[test]

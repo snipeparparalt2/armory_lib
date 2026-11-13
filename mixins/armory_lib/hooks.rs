@@ -53,6 +53,8 @@ struct Registry {
     rules: HashMap<String, MobRules>,
     carried: Vec<CarriedEffect>,
     pages: Vec<Page>,
+    /// Rare variants' looks by variant name (`mymod:gold_chicken`): from the files only.
+    variant_looks: HashMap<String, MobLook>,
 }
 
 /// Where the registry comes from: `api` is what `register_*` was given, `files` what the
@@ -184,11 +186,13 @@ fn load(host: &dyn Host) {
         files.rules.extend(declared.rules.into_iter().map(|r| (r.kind.clone(), r)));
         files.carried.extend(declared.carried);
         files.pages.extend(declared.page);
+        files.variant_looks.extend(declared.variant_looks);
     }
     for problem in problems {
         eprintln!("Armory Lib: {problem}");
     }
     bridge::set_gear(gear);
+    bridge::forget_sightings();
     let mut s = sources();
     s.files = files;
     rebuild(&s);
@@ -552,7 +556,7 @@ impl Hooks for Lib {
         }
         if logic::is_melee(event.damage_type)
             && let (Some(player), Some(attacker)) = (event.victim_uuid, event.attacker)
-            && registry().rules.values().any(|r| !r.on_hit.is_empty())
+            && registry().rules.values().any(MobRules::hits_do_something)
         {
             let mut hits = lock(&self.hits);
             if hits.len() < 256 {
@@ -594,6 +598,10 @@ impl Hooks for Lib {
             };
             if !host.on(&rule.mod_id) {
                 continue;
+            }
+            if rule.ignite_ticks > 0 {
+                // Set alight in `gear.rs`, which runs next with the player's body.
+                bridge::queue_ignite(me.uuid, rule.ignite_ticks);
             }
             for hit in &rule.on_hit {
                 host.add_effect(
@@ -700,19 +708,41 @@ pub(crate) fn on_visuals(
     }
 }
 
-/// `native_mob_submit`: `drawn` is set when the library drew the mob.
-pub(crate) fn on_mob_submit(
-    host: &dyn Host,
+/// `native_mob_submit`: `drawn` is set when the library drew the mob, a rare variant with
+/// its variant's look, a mod's type with its type's.
+pub(super) fn on_mob_submit(
+    game: &super::Game<'_>,
     mob: &NativeMobRender<'_>,
     draw: &mut BlockEntityDraw,
     drawn: &mut bool,
 ) {
+    let host: &dyn Host = game;
     if *drawn || !lib_on(host) {
+        return;
+    }
+    if let Some(look) = variant_look(game, mob)
+        && lib().draw_look(host, &look, &mut MobSubmitEvent { mob, draw })
+    {
+        *drawn = true;
         return;
     }
     if lib().mob_submit(host, &mut MobSubmitEvent { mob, draw }) == Flow::Cancel {
         *drawn = true;
     }
+}
+
+/// The look of the rare variant `mob` is, when it is one with a look and its rule is in
+/// force. Its UUID is the one the game keeps for it (the server's sweep gives one to every
+/// mob of a type with variants; a client has the server's).
+fn variant_look(game: &super::Game<'_>, mob: &NativeMobRender<'_>) -> Option<MobLook> {
+    let gear = bridge::gear();
+    if !gear.has_variants(mob.kind) {
+        return None;
+    }
+    let words = *game.persist.uuids.get(&mob.id)?;
+    let variant = gear.variant_of(mob.kind, bridge::uuid_from_words(words))?;
+    let look = registry().variant_looks.get(&variant.name).cloned()?;
+    in_force(game, &variant.mod_id, variant.setting.as_deref()).then_some(look)
 }
 
 /// `native_living_conversion_pre`: `cancel` is set when the mob keeps its type.

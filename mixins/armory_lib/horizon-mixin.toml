@@ -40,7 +40,15 @@ name = "armory_lib"
 source = "hooks.rs"
 visibility = "pub"
 
-# `gear.rs` runs the gear rules in the game. It reads the player's break, the mob list and
+# `goals.rs`: as each mob is made, a companion type gets a tame wolf's goals and a type with
+# sounds of its own gets them. In the client library, beside the mob code it hooks.
+[[module]]
+id = "goals"
+file = "crates/horizon-client/src/client_lib.rs"
+name = "armory_lib_goals"
+source = "goals.rs"
+
+# `gear.rs` runs the gear rules, companions and rare variants in the game. It reads the player's break, the mob list and
 # block facts straight from `Game`, and `sunburn.rs` hooks a raw target, so the library is
 # pinned to the Horizon commit above.
 [[module]]
@@ -138,6 +146,40 @@ bindings = [
   { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },
 ]
 
+# A new mob's goals (vanilla's `Mob.registerGoals`): companions and mob sounds.
+[[injection]]
+id = "register_goals"
+kind = "HEAD"
+target = "horizon_client_lib::mobs::ai::native_register_goals"
+helper = "register_goals.rs"
+bindings = [{ name = "mob", ty = "&mut crate::mobs::Mob", value = "&mut *mob" }]
+
+# A mob's voice (vanilla's `LivingEntity.getVoicePitch`), as it returns: a type with sounds
+# of its own speaks at its own pitch.
+[[injection]]
+id = "voice_pitch"
+kind = "RETURN"
+target = "horizon_client_lib::mobs::Mob::voice_pitch"
+helper = "voice_pitch.rs"
+bindings = [
+  { name = "value", ty = "f32", value = "$value" },
+  { name = "mob", ty = "&crate::mobs::Mob", value = "&*self" },
+]
+
+# A right click on a creature: taming, healing and sitting companions.
+[[injection]]
+id = "interact_entity"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_interact_entity"
+helper = "interact_entity.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
+  { name = "stack", ty = "Option<&horizon_client::items::ItemStack>", value = "stack" },
+  { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
+
 # Daylight is about to set an undead mob alight (vanilla's `Mob.burnUndead`): not a type a
 # mod listed with `no_sunburn`.
 [[injection]]
@@ -200,8 +242,8 @@ bindings = [
   { name = "amount", ty = "&mut i32", value = "&mut *amount" },
 ]
 
-# Tool abilities: vein mining, wide dig and tree felling where a player's break starts, the
-# harvest sweep where an item's use on a block starts.
+# Tool abilities: vein mining, wide dig and tree felling where a player's break starts; the
+# harvest sweep and summoning a companion where an item's use on a block starts.
 [[injection]]
 id = "destroy_block"
 kind = "HEAD"
