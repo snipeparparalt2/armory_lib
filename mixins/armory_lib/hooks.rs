@@ -191,6 +191,7 @@ fn load(host: &dyn Host) {
         problems.extend(super::armory_lib_trinkets_logic::load_file(&id, &file));
 
         // ---- Batch C: soul forge and upgrades (read here) ----
+        problems.extend(super::armory_lib_forge::read(&id, &file));
 
         // ---- Batch C: soul pool and charged attacks (read here) ----
 
