@@ -527,6 +527,16 @@ bindings = [
 
 # ---- Batch B: trinket slots ----
 
+# Each world save writes what the open trinkets menus keep, beside the players' saved inventories.
+[[injection]]
+id = "trinket_world_saved"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_world_saved"
+helper = "trinket_world_saved.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
 # `trinkets_logic.rs`: what the mods declare under `trinket_slots` and `trinkets`, and the sums
 # (which modifiers apply, the slots' place in the row, what a closing menu keeps), with nothing
 # from the game in it.

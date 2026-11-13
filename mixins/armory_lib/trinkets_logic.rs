@@ -756,4 +756,17 @@ mod tests {
         load_file("zz_test_mod", &json!({}));
         assert!(trinkets().defs.is_empty());
     }
+
+    /// For mod authors: `ARMORY_LIB_FILE=<path to armory_lib.json> cargo test checks_a_mods_file`
+    /// fails with what the library could not use of the file's trinket slots and trinkets.
+    #[test]
+    fn checks_a_mods_file() {
+        let Ok(path) = std::env::var("ARMORY_LIB_FILE") else {
+            return;
+        };
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let file: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let problems = read("mod", &file).1;
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
 }

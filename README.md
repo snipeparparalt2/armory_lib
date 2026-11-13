@@ -50,6 +50,12 @@ you trust. The whole source is in [`mixins/armory_lib`](mixins/armory_lib).
 | Companions | A wandering-trader copy, what tames, summons and heals it | Gives it a tame wolf's goals: it follows its owner, fights what hurts them or what they hit, sits when told; tames it with an item, or summons it with one |
 | Rare variants | A vanilla or mod type, one in how many, a look, a drop | Picks the rare ones from their UUIDs, draws them with their own look, drops their item now and then |
 | Mob sounds | An entity type, three vanilla sound events, a pitch | Plays them, at that pitch, in place of its template's |
+| Trinket slots | How many slots, a key | A row of trinket slots of each player's own, opened with the key (G) or `/trinkets`, kept per world and through death |
+| Trinkets | Items, attribute modifiers, an experience bonus | Gives the modifiers while the item is in a trinket slot, and more experience from orbs |
+| Backpacks | Items and a size in rows | Opens a chest menu of that size on a right click; the world keeps what each bag holds, so a dropped or copied bag never duplicates items |
+| Soul jars | A jar, its full form, a capacity | Puts a soul in the player's jar for each mob they kill; a full jar becomes the full item. Shows a fill bar and a souls line |
+| Waystones | Blocks, a cooldown, a level cost | A right click registers the waystone and opens a menu of the ones the player found; a click takes them there, across dimensions too. A name tag renames one |
+| Recall items | Items, a level cost, a cooldown | A right click takes the player to the waystone it is bound to (sneak-click a waystone with it), else to their bed or respawn anchor, else the world spawn |
 | Carried effects | Items, where they must be, an effect | Gives the effect while the item is there and takes it away after |
 | Armour sets | Its pieces and what the whole set does | Effects, no fall damage, healing, less knockback or explosion damage, more experience |
 | Tool abilities | Tools and an ability | While sneaking: vein mining, 3 x 3 digging or tree felling, as the player's own breaks |
@@ -102,6 +108,15 @@ Lib the file is simply not read. Every section is optional; ids are full ids.
     {"kind": "mymod:hound", "ambient": "entity.wolf.growl", "hurt": "entity.wolf.hurt",
      "death": "entity.wolf.death", "pitch": 0.7}
   ],
+  "trinket_slots": {"slots": 3, "key": "key.keyboard.g", "setting": "trinkets"},
+  "trinkets": [
+    {"items": ["mymod:ring"], "setting": "trinkets", "experience_bonus": 0.25,
+     "modifiers": [{"attribute": "minecraft:max_health", "amount": 4.0, "operation": "add_value"}]}
+  ],
+  "backpacks": [{"items": ["mymod:small_pack"], "rows": 1, "setting": "backpacks"}],
+  "soul_jars": [{"item": "mymod:soul_jar", "full": "mymod:soul_jar_full", "capacity": 50}],
+  "waystones": [{"blocks": ["mymod:waystone"], "cooldown_seconds": 60, "cost_levels": 0}],
+  "recall": [{"items": ["mymod:recall_charm"], "cost_levels": 1, "cooldown_seconds": 120}],
   "carried_effects": [
     {"items": ["mymod:swift_ring"], "place": "hotbar", "effect": "minecraft:speed", "amplifier": 0}
   ],
@@ -147,6 +162,13 @@ Lib the file is simply not read. Every section is optional; ids are full ids.
 | `look` (variant) | As a `mob_looks` entry without `kind`; `rig` defaults to the type's body |
 | `ambient`, `hurt`, `death` | Vanilla sound events (`entity.wolf.growl`); a content mod can't add `minecraft:` ones |
 | `pitch` | Times the mob's own voice pitch, 0.5 to 2 |
+| `slots`, `key` | Trinket slots, 1 to 7 (3); every mod shares one row, the most any file declares. The key that opens them (`key.keyboard.g`); the first a file names is used |
+| `modifiers` | `attribute` (`minecraft:max_health`), `amount`, `operation`: `add_value` (default), `add_multiplied_base` or `add_multiplied_total` |
+| `experience_bonus` (trinket) | Extra experience from orbs, 0.25 for a quarter more (0 to 10); bonuses of different trinkets add up |
+| `rows` | A backpack's size, 1 to 6 rows of 9 (3) |
+| `item`, `full`, `capacity` | A soul jar while it fills, the item it becomes when full, and the souls that fill it (50) |
+| `cooldown_seconds` | Waystones: seconds a player waits between two trips, whichever waystone (60). Recall: the item's cooldown after a use (120) |
+| `cost_levels` | Experience levels a trip takes, none in creative (waystones 0, recall 1) |
 
 Check your file before you ship it, in this repository:
 
@@ -231,6 +253,30 @@ sounds are declared in the file only.
   or stand. Its click never opens a trader's menu.
 - **Variants** are picked from each mob's UUID, the same on every side and every load. They need
   a texture in the layout of their rig.
+- **Trinkets** live in a row of their own: the trinkets key (G) while playing or in the inventory,
+  or `/trinkets`, opens it. Only items a file lists as trinkets stay in it, one to a slot; anything
+  else goes back to the player when it closes. They are kept in
+  `<world>/armory_lib/trinkets/<player uuid>.dat`, so they stay through death like an ender
+  chest's items. Their modifiers are added as temporary ones (`armory_lib:trinket/<n>`); two
+  copies of a trinket count once, and one held in the off hand gives only its item's own off-hand
+  modifiers, though its experience bonus still counts.
+- **A backpack holds an id, not items.** The first time it opens it gets `armory_lib:bag` in its
+  custom data; what it holds is in `<world>/armory_lib/backpacks/<id>.dat`, saved when the menu
+  closes and with each world save while it is open. Copies of one bag share what they hold, and
+  one bag opens for one player at a time. Backpacks can't go inside backpacks. Give backpack and
+  jar items `"max_stack_size": 1`.
+- **Soul jars fill from a player's melee kills** of any mob: the first jar in the hotbar, left to
+  right, then the off hand. The count is `armory_lib:souls` in the jar's custom data.
+- **Waystones** are kept for each world in `<world>/armory_lib/waystones.json`. A new one is named
+  after its biome. The menu lists only the waystones that player found, this dimension first and
+  nearest first, up to 54, and opens a tick after the click. Travellers land on top of the block.
+  The cooldown is per player and isn't saved. A waystone a player breaks leaves the list at once;
+  one removed another way goes when someone tries to travel there. Sneaking with another item in
+  hand leaves the block alone, so blocks can be placed against it.
+- **Recall items** cool down as an ender pearl does. Sneak-click a waystone with one to bind it
+  (`armory_lib:recall` in its custom data); when that waystone is gone it takes the player home.
+- **Text** the library shows is English, with lang keys a mod can translate where it has them
+  (`armory_lib.backpack.open_elsewhere`, `armory_lib.soul_jar.souls`).
 - **Carried effects** are given for 16 seconds and renewed every 2, without particles, and taken
   away the tick the item leaves its place. The strongest level wins when two rules give the same
   effect.
@@ -247,9 +293,9 @@ sounds are declared in the file only.
 
 ### Planned
 
-Not in 0.1.0: item inventories (backpacks), waypoints with teleport costs, block menus and
-screens, attribute modifiers as carried effects, a sitting pose for companions, and bodies built
-in code rather than taken from vanilla.
+Not in 0.1.0: block menus and screens (a soul forge), a button for the trinket slots in the
+inventory screen, attribute modifiers as carried effects, a sitting pose for companions, and
+bodies built in code rather than taken from vanilla.
 
 ## Compatibility
 
@@ -261,13 +307,13 @@ in code rather than taken from vanilla.
 
 The library is a plain mixin bundle, with no `[api]` package, so the launcher builds the game as
 it is (a trait mod would make it generate its own executable, which newer launchers write for a
-newer Horizon). It adds `armory_lib_bridge` to the client library and `armory_lib`,
-`armory_lib_logic` and `armory_lib_gear` to the game, and hooks the head of the game's own catalog
-hook functions: `native_mods`, `native_settings`, `native_settings_click`, `native_visuals`,
-`native_mob_submit`, `native_living_conversion_pre`, `native_living_incoming_damage_v3`,
-`native_player_tick`, `native_server_data_loaded`, `native_client_resources_reloaded` with the
-game as `Host`, and eleven more for the gear and the companions (`native_interact_entity` among
-them). In the client library it adds `armory_lib_goals`, hooks the start of
+newer Horizon). It adds `armory_lib_bridge` to the client library and its other modules to the
+game, and hooks the head of the game's own catalog hook functions: `native_mods`,
+`native_settings`, `native_settings_click`, `native_visuals`, `native_mob_submit`,
+`native_living_conversion_pre`, `native_living_incoming_damage_v3`, `native_player_tick`,
+`native_server_data_loaded`, `native_client_resources_reloaded` with the game as `Host`, and more
+for the gear, companions, trinkets, backpacks, soul jars and waystones (item use, block clicks,
+kills, server menus, commands, keys, world saves, the item bar and tooltip among them). In the client library it adds `armory_lib_goals`, hooks the start of
 `mobs::ai::burn_undead` for `no_sunburn` and of `mobs::ai::native_register_goals` for companions
 and sounds, and the return of `Mob::voice_pitch`. It reads the game's state directly, so the
 library is pinned to one Horizon commit.
@@ -307,7 +353,10 @@ it with a new version number.
   - `bridge.rs`: what all parts share: the gear rules, companions, variants and mob sounds,
     their logic and tests, switches, the daylight list. `gear.rs`: the gear rules, companions
     and variants in the game. `goals.rs`: companions' goals and mob sounds as each mob is made.
-    `sunburn.rs` and the other `.rs` files: one small helper per hook.
+  - `trinkets.rs`, `packs.rs` (backpacks, soul jars), `ways.rs` (waystones, recall items): those
+    features in the game; `*_logic.rs` beside each: what the files declare, the sums and tests.
+    `store.rs`: the library's files in `<world>/armory_lib/` and item custom data.
+  - `sunburn.rs` and the other `.rs` files: one small helper per hook.
 - `tools/`: packaging, the type-check script and the icon generator
 - `docs/`: the icon and the signing guide
 - `dist/`: the latest built package and its checksum

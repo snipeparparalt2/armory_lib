@@ -7,9 +7,11 @@
 // - The server: `/trinkets` opens a one-row chest titled "Trinkets" whose middle slots are the
 //   player's trinket slots. They are kept in `<world>/armory_lib/trinkets/<uuid>.dat`, apart
 //   from the player's own file, so a death leaves them where they are, as an ender chest's
-//   items. While the menu is open its slots hold the items and the file is empty; when it
-//   closes, for whatever reason, the trinkets go back into the file and the rest back to the
-//   player, so an item is always in one place.
+//   items. While the menu is open the file keeps what it held, written again with what the
+//   menu holds at each world save (beside the players' saved inventories), so a crash finds
+//   the slots and the inventory as they were saved together. When the menu closes, for
+//   whatever reason, the trinkets are written to the file before they leave the menu and the
+//   rest goes back to the player, so an item is always in one place.
 // - Each player tick: the trinkets' attribute modifiers on the player, as transient modifiers
 //   (never saved: given again after a respawn or a rejoin), and their experience bonus for the
 //   orbs they pick up.
@@ -120,6 +122,8 @@ struct Open {
     window: i32,
     conn: u32,
     path: PathBuf,
+    /// The menu's slots that are trinket slots.
+    input: std::ops::Range<usize>,
 }
 
 static OPEN: Mutex<Vec<Open>> = Mutex::new(Vec::new());
@@ -243,13 +247,9 @@ fn open(game: &mut Game<'_>, player: &NativeServerPlayer, all: &t::Trinkets) -> 
     };
     let reach = stacks.iter().rposition(Option::is_some).map_or(0, |i| i + 1);
     let input = t::input_slots(all.slots, reach);
-    // From here until the menu closes its slots hold the items, so the file is emptied first:
-    // whatever closes the menu (the server stopping too) gives them to the close hook.
-    if let Err(e) = store::write_items(&path, &[]) {
-        eprintln!("Armory Lib: trinkets: {e}");
-        return Err("Your trinkets can't be opened: their file can't be written.");
-    }
-    // The slots keep working while the menu is open: what they held as it opened.
+    // The file keeps them while the menu is open (world saves write what it holds); the close
+    // hook writes what it keeps before anything leaves the menu. The slots keep working
+    // meanwhile with what they held as it opened.
     remember(&path, &stacks);
     let items: Vec<Option<ItemStack>> = (0..t::ROW)
         .map(|k| match k.checked_sub(input.start) {
@@ -257,30 +257,58 @@ fn open(game: &mut Game<'_>, player: &NativeServerPlayer, all: &t::Trinkets) -> 
             _ => Some(pane()),
         })
         .collect();
-    match game.native_open_menu_with_input(uuid, 1, Text::literal(TITLE), items, input) {
+    match game.native_open_menu_with_input(uuid, 1, Text::literal(TITLE), items, input.clone()) {
         Some(window) => {
-            lock(&OPEN).push(Open { uuid, window, conn, path });
+            lock(&OPEN).push(Open { uuid, window, conn, path, input });
             Ok(())
         }
-        None => {
-            put_back(game, player, &path, stacks);
-            Err("You can't open your trinkets now.")
-        }
+        // The file still holds them: nothing moved.
+        None => Err("You can't open your trinkets now."),
     }
 }
 
-/// The menu didn't open: the items go back into the file, or, if it can't be written, to the
-/// player (at their feet what doesn't fit).
-fn put_back(game: &mut Game<'_>, player: &NativeServerPlayer, path: &Path, stacks: Vec<Option<ItemStack>>) {
-    let Err(e) = store::write_items(path, &stacks) else {
-        return;
-    };
-    eprintln!("Armory Lib: trinkets: {e}; they are given back");
-    remember(path, &[]);
-    let at = player.position.map(|c| c.floor() as i32);
-    for stack in stacks.into_iter().flatten() {
-        if let Some(left) = game.native_give_stack(player.uuid, stack) {
-            game.pop_resource(at, left);
+/// What the file keeps of a menu's input slots `slots`: one of each trinket, in slot order.
+fn kept_of(slots: &[Option<ItemStack>], all: &t::Trinkets) -> (Vec<(usize, usize)>, Vec<Option<ItemStack>>) {
+    let items: Vec<Option<&str>> = slots
+        .iter()
+        .map(|s| s.as_ref().filter(|s| s.count > 0).map(|s| &*s.item))
+        .collect();
+    let plan = t::keep_plan(&items, all.slots, |item| all.is_trinket(item));
+    let mut kept: Vec<Option<ItemStack>> = vec![None; all.slots.max(1)];
+    for &(from, to) in &plan {
+        if let Some(cell) = kept.get_mut(to) {
+            *cell = slots[from].clone().map(|s| ItemStack { count: 1, ..s });
+        }
+    }
+    (plan, kept)
+}
+
+/// `native_world_saved`: the world and its players were just saved. Each open trinkets menu's
+/// file gets what the menu keeps now, so a crash before it closes finds the slots as they were
+/// when the player's inventory was saved. Its closing writes the file again.
+pub(super) fn on_world_saved(game: &mut Game<'_>) {
+    let open: Vec<(u128, i32, PathBuf, std::ops::Range<usize>)> = lock(&OPEN)
+        .iter()
+        .map(|o| (o.uuid, o.window, o.path.clone(), o.input.clone()))
+        .collect();
+    let all = t::trinkets();
+    for (uuid, window, path, input) in open {
+        // Still the menu the player has open (the server's menus in reach).
+        let showing = game
+            .lan
+            .as_ref()
+            .and_then(|host| host.hub.guests.iter().find(|g| g.placed && g.uuid == uuid))
+            .and_then(|g| g.menu.as_ref())
+            .is_some_and(|m| m.window == window);
+        let Some(contents) = game.native_menu_contents(uuid).filter(|_| showing) else {
+            continue;
+        };
+        let Some(slots) = contents.get(input) else {
+            continue;
+        };
+        let (_, kept) = kept_of(slots, &all);
+        if let Err(e) = store::write_items(&path, &kept) {
+            eprintln!("Armory Lib: trinkets: open trinkets not saved with the world ({e})");
         }
     }
 }
@@ -300,22 +328,15 @@ pub(super) fn on_menu_closed(uuid: u128, window: i32, slots: &mut [Option<ItemSt
         open.remove(i)
     };
     let all = t::trinkets();
-    let items: Vec<Option<&str>> = slots
-        .iter()
-        .map(|s| s.as_ref().filter(|s| s.count > 0).map(|s| &*s.item))
-        .collect();
-    let plan = t::keep_plan(&items, all.slots, |item| all.is_trinket(item));
-    if plan.is_empty() {
-        // The file was emptied as the menu opened.
-        remember(&open.path, &[]);
-        return;
-    }
-    let mut kept: Vec<Option<ItemStack>> = vec![None; all.slots];
-    for &(from, to) in &plan {
-        kept[to] = slots[from].clone().map(|s| ItemStack { count: 1, ..s });
-    }
+    let (plan, kept) = kept_of(slots, &all);
     if let Err(e) = store::write_items(&open.path, &kept) {
+        // Everything goes back to the player, so the file must not keep the old slots too.
         eprintln!("Armory Lib: trinkets: {e}; they go back to the player");
+        if let Err(e) = std::fs::remove_file(&open.path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!("Armory Lib: trinkets: {} can't be removed either: {e}", open.path.display());
+        }
         remember(&open.path, &[]);
         note(uuid, "Your trinkets couldn't be saved, so they went back to your inventory.");
         return;

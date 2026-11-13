@@ -28,6 +28,15 @@ First version, for Horizon `fdc87ae` (Nightly 2026-11-08, game data 26.3).
   dropping an item now and then (a gold chicken laying nuggets).
 - Mob sounds (`mob_sounds`): vanilla sound events in place of a type's own, at a pitch.
 - Burning blows: a mob rule's `ignite_seconds` sets the player it hits alight.
+- Trinket slots (`trinket_slots`, `trinkets`): a row of slots of each player's own, opened with
+  a key (G) or `/trinkets`, kept per world; trinkets there give attribute modifiers and bonus
+  experience.
+- Backpacks (`backpacks`): a chest menu on a right click; contents kept in the world by the bag's
+  id, so nothing is lost or duplicated.
+- Soul jars (`soul_jars`): fill from the player's kills, show a fill bar, turn into their full
+  item.
+- Waystones (`waystones`) and recall items (`recall`): find, name and travel between waystones
+  from a menu; a recall item takes the player to a bound waystone or home.
 - A plain mixin bundle, with no `[api]` package: launchers newer than Horizon `fdc87ae` build it
   (a trait mod made them generate an executable for a newer Horizon, which failed with
   ``cannot find type `GameAllocator` in crate `horizon_threads` ``). The `register_*` functions
