@@ -48,6 +48,14 @@ file = "crates/horizon-client/src/client_lib.rs"
 name = "armory_lib_goals"
 source = "goals.rs"
 
+# `store.rs`: what the library keeps for a world, in `<world>/armory_lib/`, and small item
+# helpers (custom data, ids).
+[[module]]
+id = "store"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_store"
+source = "store.rs"
+
 # `gear.rs` runs the gear rules, companions and rare variants in the game. It reads the player's break, the mob list and
 # block facts straight from `Game`, and `sunburn.rs` hooks a raw target, so the library is
 # pinned to the Horizon commit above.
@@ -319,3 +327,9 @@ bindings = [
   { name = "context", ty = "&horizon_client::mod_api::NativeLootDrops<'_>", value = "context" },
   { name = "drops", ty = "&mut Vec<horizon_client::items::ItemStack>", value = "&mut *drops" },
 ]
+
+# ---- Batch B: backpacks and soul jar ----
+
+# ---- Batch B: waystones and recall charm ----
+
+# ---- Batch B: trinket slots ----

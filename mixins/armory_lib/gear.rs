@@ -15,7 +15,7 @@ use horizon_world::registry::BlockStateId;
 
 /// Whether a rule of mod `mod_id` is in force: the mod is on in Options > Mods, and so is the
 /// switch of its page the rule names, if it names one.
-fn on(game: &Game<'_>, mod_id: &str, setting: Option<&str>) -> bool {
+pub(super) fn on(game: &Game<'_>, mod_id: &str, setting: Option<&str>) -> bool {
     let mod_on = game.native_on(mod_id);
     m::note_mod_on(mod_id, mod_on);
     mod_on && m::switch_on(mod_id, setting, m::now_ms(), |id, key| game.native_setting(id, key))

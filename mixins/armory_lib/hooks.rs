@@ -181,6 +181,12 @@ fn load(host: &dyn Host) {
         }
         problems.extend(declared.problems);
         problems.extend(bridge::read_gear(&id, &file, &mut gear));
+        // ---- Batch B: backpacks and soul jar (read here) ----
+
+        // ---- Batch B: waystones and recall charm (read here) ----
+
+        // ---- Batch B: trinket slots (read here) ----
+
         files.lights.extend(declared.lights.into_iter().map(|l| (l.item.clone(), l)));
         files.looks.extend(declared.looks.into_iter().map(|l| (l.kind.clone(), l)));
         files.rules.extend(declared.rules.into_iter().map(|r| (r.kind.clone(), r)));
