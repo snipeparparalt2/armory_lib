@@ -1,0 +1,13 @@
+# Armory Lib: a native library mod (Horizon docs/native-mods.md, "Trait mods" and
+# "Dependencies between trait mods"). It has no mixin injections: everything is in the
+# `[api]` package, which the launcher links into the game. Other mods name it under
+# `[dependencies]` in their own horizon-mixin.toml and call its public functions.
+[mod]
+id = "armory_lib"
+version = "0.1.0"
+
+[compatibility]
+horizon_revision = "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca"
+
+[api]
+path = "api"
