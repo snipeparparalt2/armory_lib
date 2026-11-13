@@ -190,6 +190,14 @@ fn load(host: &dyn Host) {
         // ---- Batch B: trinket slots (read here) ----
         problems.extend(super::armory_lib_trinkets_logic::load_file(&id, &file));
 
+        // ---- Batch C: soul forge and upgrades (read here) ----
+
+        // ---- Batch C: soul pool and charged attacks (read here) ----
+
+        // ---- Batch C: creatures and bosses (read here) ----
+
+        // ---- Batch C: citadel, door and map scrap (read here) ----
+
         files.lights.extend(declared.lights.into_iter().map(|l| (l.item.clone(), l)));
         files.looks.extend(declared.looks.into_iter().map(|l| (l.kind.clone(), l)));
         files.rules.extend(declared.rules.into_iter().map(|r| (r.kind.clone(), r)));

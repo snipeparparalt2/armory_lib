@@ -30,5 +30,13 @@ path = "mixins/armory_lib/ways_logic.rs"
 name = "trinkets"
 path = "mixins/armory_lib/trinkets_logic.rs"
 
+# ---- Batch C: soul forge and upgrades ----
+
+# ---- Batch C: soul pool and charged attacks ----
+
+# ---- Batch C: creatures and bosses ----
+
+# ---- Batch C: citadel, door and map scrap ----
+
 [dependencies]
 serde_json = "1"

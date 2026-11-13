@@ -641,3 +641,11 @@ bindings = [
   { name = "player", ty = "u128", value = "player" },
   { name = "amount", ty = "&mut i32", value = "&mut *amount" },
 ]
+
+# ---- Batch C: soul forge and upgrades ----
+
+# ---- Batch C: soul pool and charged attacks ----
+
+# ---- Batch C: creatures and bosses ----
+
+# ---- Batch C: citadel, door and map scrap ----
