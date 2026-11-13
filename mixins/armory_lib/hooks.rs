@@ -182,6 +182,7 @@ fn load(host: &dyn Host) {
         problems.extend(declared.problems);
         problems.extend(bridge::read_gear(&id, &file, &mut gear));
         // ---- Batch B: backpacks and soul jar (read here) ----
+        problems.extend(super::armory_lib_packs_logic::read(&id, &file));
 
         // ---- Batch B: waystones and recall charm (read here) ----
 

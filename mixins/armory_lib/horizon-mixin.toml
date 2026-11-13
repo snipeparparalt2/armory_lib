@@ -330,6 +330,114 @@ bindings = [
 
 # ---- Batch B: backpacks and soul jar ----
 
+# `packs_logic.rs`: the backpack and soul jar rules read from the mods' files, and their sums,
+# with nothing from the game in it (`cargo test` runs it alone).
+[[module]]
+id = "packs_logic"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_packs_logic"
+source = "packs_logic.rs"
+
+# `packs.rs`: backpacks (a chest menu whose items the world keeps in
+# `<world>/armory_lib/backpacks/<id>.dat`) and soul jars (filled by kills).
+[[module]]
+id = "packs"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_packs"
+source = "packs.rs"
+
+# A right click with a backpack asks for its menu. A player's item use runs with the server's
+# menus out of reach, so it opens when the player's level has ticked, with that level in
+# place.
+[[injection]]
+id = "pack_use_item"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_use_item"
+helper = "pack_use_item.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
+
+[[injection]]
+id = "pack_level_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_level_tick_post"
+helper = "pack_level_tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "dimension", ty = "&str", value = "dimension" },
+]
+
+# Each world save writes what the open backpacks hold, beside the players' saved inventories.
+[[injection]]
+id = "pack_world_saved"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_world_saved"
+helper = "pack_world_saved.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+# A backpack's menu closing, for any reason: its items go to its file, then what is left
+# (backpacks) back to the player.
+[[injection]]
+id = "pack_input_closed"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_menu_input_closed"
+helper = "pack_input_closed.rs"
+bindings = [
+  { name = "uuid", ty = "u128", value = "uuid" },
+  { name = "window", ty = "i32", value = "window" },
+  { name = "slots", ty = "&mut Vec<Option<horizon_client::items::ItemStack>>", value = "&mut *slots" },
+]
+
+[[injection]]
+id = "pack_menu_closed"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"
+helper = "pack_menu_closed.rs"
+bindings = [
+  { name = "uuid", ty = "u128", value = "uuid" },
+  { name = "window", ty = "i32", value = "window" },
+]
+
+# A player's blow killed a mob: their soul jar takes its soul. On the client, a jar's fill bar
+# and its tooltip line.
+[[injection]]
+id = "soul_mob_killed"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mob_killed"
+helper = "soul_mob_killed.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "u128", value = "player" },
+  { name = "entity", ty = "u32", value = "entity" },
+]
+
+[[injection]]
+id = "soul_item_bar"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_item_bar"
+helper = "soul_item_bar.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "bar", ty = "&mut Option<(i32, u32)>", value = "&mut *bar" },
+]
+
+[[injection]]
+id = "soul_tooltip"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_tooltip"
+helper = "soul_tooltip.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "lines", ty = "&mut Vec<(horizon_client::text::Text, u32)>", value = "&mut *lines" },
+]
+
 # ---- Batch B: waystones and recall charm ----
 
 # ---- Batch B: trinket slots ----
