@@ -808,6 +808,118 @@ bindings = [
 
 # ---- Batch C: soul pool and charged attacks ----
 
+# `souls_logic.rs`: what the mods declare under `soul_pool`, `charged_attacks`, `soul_weapons`
+# and `steal_souls`, and the sums, with nothing from the game in it (`cargo test` runs it as the
+# `souls` test).
+[[module]]
+id = "souls_logic"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_souls_logic"
+source = "souls_logic.rs"
+
+# `souls.rs`: every player's soul pool (kept per world in `<world>/armory_lib/souls/`), charged
+# slams and thrusts, soul weapons, the pool's trinket and set bonuses, creatures that steal souls.
+[[module]]
+id = "souls"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_souls"
+source = "souls.rs"
+
+[[injection]]
+id = "souls_player_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_player_tick"
+helper = "souls_player_tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "souls_mob_killed"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mob_killed"
+helper = "souls_mob_killed.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "u128", value = "player" },
+  { name = "entity", ty = "u32", value = "entity" },
+]
+
+# A charged weapon: used over time like a bow (both sides answer the same), raised while it
+# charges (the client), the pool shown as the charge starts, a sound when it is full, and the
+# slam or thrust when it is let go.
+[[injection]]
+id = "souls_use_duration"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_use_duration"
+helper = "souls_use_duration.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "duration", ty = "&mut i32", value = "&mut *duration" },
+]
+
+[[injection]]
+id = "souls_use_animation"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_use_animation"
+helper = "souls_use_animation.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "animation", ty = "&mut horizon_world::consumable::UseAnimation", value = "&mut *animation" },
+]
+
+[[injection]]
+id = "souls_use_item"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_use_item"
+helper = "souls_use_item.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
+
+[[injection]]
+id = "souls_use_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_on_use_tick"
+helper = "souls_use_tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "remaining", ty = "i32", value = "remaining" },
+]
+
+[[injection]]
+id = "souls_release_using"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_release_using"
+helper = "souls_release_using.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "time_left", ty = "i32", value = "time_left" },
+]
+
+# Every hit, through the game's first damage hook: unlike `_v2` and `_v3` it is called whether or
+# not a trait mod is loaded (those two only run while `mod_api::mods()` isn't empty, and a plain
+# mixin build has no trait mods). A soul weapon's hit, a set's immunity, a soul-stealing blow.
+[[injection]]
+id = "souls_incoming_damage"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage"
+helper = "souls_incoming_damage.rs"
+bindings = [
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
+  { name = "damage_type", ty = "&str", value = "damage_type" },
+  { name = "causing", ty = "i32", value = "causing" },
+  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
 # ---- Batch C: creatures and bosses ----
 
 # ---- Batch C: citadel, door and map scrap ----

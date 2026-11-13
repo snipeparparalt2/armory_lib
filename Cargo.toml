@@ -38,6 +38,10 @@ name = "forge"
 path = "mixins/armory_lib/forge_logic.rs"
 
 # ---- Batch C: soul pool and charged attacks ----
+# The soul pool, charged attacks, soul weapons and soul stealing: what the files declare, the sums.
+[[test]]
+name = "souls"
+path = "mixins/armory_lib/souls_logic.rs"
 
 # ---- Batch C: creatures and bosses ----
 
