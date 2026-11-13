@@ -25,5 +25,10 @@ path = "mixins/armory_lib/packs_logic.rs"
 name = "ways"
 path = "mixins/armory_lib/ways_logic.rs"
 
+# Trinket slots: what the mods declare for them, and the sums (no game types).
+[[test]]
+name = "trinkets"
+path = "mixins/armory_lib/trinkets_logic.rs"
+
 [dependencies]
 serde_json = "1"
