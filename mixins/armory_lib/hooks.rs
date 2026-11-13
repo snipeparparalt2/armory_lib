@@ -185,6 +185,7 @@ fn load(host: &dyn Host) {
         problems.extend(super::armory_lib_packs_logic::read(&id, &file));
 
         // ---- Batch B: waystones and recall charm (read here) ----
+        problems.extend(super::armory_lib_ways::read(&id, &file));
 
         // ---- Batch B: trinket slots (read here) ----
 

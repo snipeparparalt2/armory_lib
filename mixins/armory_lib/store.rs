@@ -29,13 +29,11 @@ pub(super) fn write_items(path: &Path, slots: &[Option<ItemStack>]) -> Result<()
 }
 
 /// A JSON file of the library's, or None when there is none or it doesn't parse.
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 /// Writes a JSON file whole (making its folder).
-#[allow(dead_code)] // used by the Batch B features
 pub(super) fn write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
     if let Some(dir) = path.parent() {
