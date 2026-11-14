@@ -30,7 +30,7 @@ use super::armory_lib_logic as logic;
 use super::{BlockEntityDraw, NativeMobRender};
 use crate::mod_api::{
     ClientResourcesReloadedEvent, EquipmentSlot, Flow, Hooks, Host, LivingConversionPreEvent,
-    LivingIncomingDamageV3Event, MobSubmitEvent, ModelPart, ModsEvent, NativeBlockRim,
+    MobSubmitEvent, ModelPart, ModsEvent, NativeBlockRim,
     NativeColoredLight, NativeEffect, NativeMod, PlayerTickEvent, ServerDataLoadedEvent,
     SettingsClickEvent, SettingsEvent, VisualsEvent,
 };
@@ -295,8 +295,9 @@ struct Lib {
     /// Baked model layers by name, each the library's own copy to pose.
     models: Mutex<HashMap<String, Option<ModelPart>>>,
     wearers: Mutex<HashMap<u128, Wearer>>,
-    /// Hits waiting for a hook with a host: the player hurt and the entity that did it.
-    hits: Mutex<Vec<(u128, u32)>>,
+    /// Hits waiting for a hook with a host: the hurt player's entity id and the entity that
+    /// did it.
+    hits: Mutex<Vec<(i32, u32)>>,
 }
 
 const ARMOUR: [EquipmentSlot; 4] = [
@@ -560,31 +561,6 @@ impl Hooks for Lib {
         if stays { Flow::Cancel } else { Flow::Continue }
     }
 
-    /// Burning does a fire-proof type no harm; a hit by a type with hit effects is noted
-    /// for the hurt player's next tick (this hook has no host).
-    fn living_incoming_damage_v3(&self, event: &mut LivingIncomingDamageV3Event<'_>) -> Flow {
-        let on = |mod_id: &str| mods_on().get(mod_id).copied().unwrap_or(true);
-        if logic::is_burning(event.damage_type) {
-            let proof = registry()
-                .rules
-                .get(event.kind)
-                .is_some_and(|r| r.fire_proof && on(&r.mod_id));
-            if proof {
-                return Flow::Cancel;
-            }
-        }
-        if logic::is_melee(event.damage_type)
-            && let (Some(player), Some(attacker)) = (event.victim_uuid, event.attacker)
-            && registry().rules.values().any(MobRules::hits_do_something)
-        {
-            let mut hits = lock(&self.hits);
-            if hits.len() < 256 {
-                hits.push((player, attacker));
-            }
-        }
-        Flow::Continue
-    }
-
     /// Each player's server tick: the effects of what they carry, and of the hits they took.
     fn player_tick(&self, host: &mut dyn Host, _event: &mut PlayerTickEvent) {
         ensure_loaded(host);
@@ -606,8 +582,8 @@ impl Hooks for Lib {
         // Hits on this player, now that there is a host to ask who dealt them.
         let mine: Vec<u32> = {
             let mut hits = lock(&self.hits);
-            let mine = hits.iter().filter(|(p, _)| *p == me.uuid).map(|(_, a)| *a).collect();
-            hits.retain(|(p, _)| *p != me.uuid);
+            let mine = hits.iter().filter(|(p, _)| *p == me.entity_id).map(|(_, a)| *a).collect();
+            hits.retain(|(p, _)| *p != me.entity_id);
             mine
         };
         for attacker in mine {
@@ -781,36 +757,41 @@ pub(crate) fn on_living_conversion_pre(
     }
 }
 
-/// `native_living_incoming_damage_v3` (it has no host).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn on_living_incoming_damage_v3(
-    victim: u32,
-    victim_uuid: Option<u128>,
+/// `native_living_incoming_damage` (it has no host; unlike `_v3` it runs without a trait mod).
+/// Burning does a fire-proof type no harm; a player's hit (`entity`, by entity id) by a type
+/// with hit effects is noted for that player's next tick, with the mob that dealt it.
+pub(crate) fn on_living_incoming_damage(
+    entity: i32,
     kind: &str,
-    attacker: Option<u32>,
-    attacker_uuid: Option<u128>,
-    direct: Option<u32>,
     damage_type: &str,
-    amount: &mut f32,
+    causing: i32,
     cancel: &mut bool,
 ) {
     if *cancel || !LIB_ON.load(Ordering::Relaxed) {
         return;
     }
-    let mut event = LivingIncomingDamageV3Event {
-        victim,
-        victim_uuid,
-        kind,
-        attacker,
-        attacker_uuid,
-        direct,
-        damage_type,
-        amount: *amount,
-    };
-    if lib().living_incoming_damage_v3(&mut event) == Flow::Cancel {
-        *cancel = true;
+    let on = |mod_id: &str| mods_on().get(mod_id).copied().unwrap_or(true);
+    if logic::is_burning(damage_type) {
+        let proof = registry()
+            .rules
+            .get(kind)
+            .is_some_and(|r| r.fire_proof && on(&r.mod_id));
+        if proof {
+            *cancel = true;
+            return;
+        }
     }
-    *amount = event.amount;
+    if kind == "minecraft:player"
+        && logic::is_melee(damage_type)
+        && let Ok(attacker) = u32::try_from(causing)
+        && attacker > 0
+        && registry().rules.values().any(MobRules::hits_do_something)
+    {
+        let mut hits = lock(&lib().hits);
+        if hits.len() < 256 {
+            hits.push((entity, attacker));
+        }
+    }
 }
 
 /// `native_player_tick`, with the ticking player swapped in.

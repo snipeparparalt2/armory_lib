@@ -1,28 +1,15 @@
-// Hook helper: native_living_incoming_damage_v3 (HEAD). Fire-proof creatures, hits that give
-// effects; set bonuses against falls and explosions.
+// Hook helper: native_living_incoming_damage (HEAD), which runs for every hit with or without a
+// trait mod (`_v2` and `_v3` don't). Fire-proof creatures and hits that give effects; weapon
+// effects, sharpened and set cuts; warded.
 fn armory_lib_incoming_damage(
-    victim: u32,
-    victim_uuid: Option<u128>,
+    entity: i32,
     kind: &str,
-    attacker: Option<u32>,
-    attacker_uuid: Option<u128>,
-    direct: Option<u32>,
     damage_type: &str,
+    causing: i32,
     amount: &mut f32,
-    cancel: &mut bool,
+    canceled: &mut bool,
 ) {
-    crate::game::armory_lib::on_living_incoming_damage_v3(
-        victim,
-        victim_uuid,
-        kind,
-        attacker,
-        attacker_uuid,
-        direct,
-        damage_type,
-        amount,
-        cancel,
-    );
-    if !*cancel {
-        crate::game::armory_lib_gear::on_incoming_damage(victim_uuid, damage_type, amount, cancel);
-    }
+    crate::game::armory_lib::on_living_incoming_damage(entity, kind, damage_type, causing, canceled);
+    crate::game::armory_lib_gear::on_incoming_damage(entity, kind, damage_type, amount, canceled);
+    crate::game::armory_lib_forge::on_incoming_damage(entity, kind, damage_type, amount, canceled);
 }

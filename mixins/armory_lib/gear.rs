@@ -10,6 +10,7 @@ use horizon_client::armory_lib_bridge as m;
 use horizon_client::items::ItemStack;
 use horizon_client::mod_api::NativeLootDrops;
 use horizon_client::particles::ParticleOptions;
+use horizon_world::attributes::Operation;
 use horizon_world::player_inventory::EquipmentSlot;
 use horizon_world::registry::BlockStateId;
 
@@ -30,6 +31,11 @@ pub(super) fn on_player_tick(game: &mut Game<'_>) {
     let Some(me) = game.native_acting_player() else {
         return;
     };
+    // An attack of theirs whose weapon hit never landed is over (and the splashes below must
+    // not count as its hits).
+    if let Some(body) = game.player.as_ref() {
+        m::end_attack(body.entity_id);
+    }
     let gear = m::gear();
     let set = if gear.sets.is_empty() {
         None
@@ -49,6 +55,17 @@ pub(super) fn on_player_tick(game: &mut Game<'_>) {
         && before != set
     {
         take_set_effects(game, me.uuid, old);
+    }
+    // Given each tick it applies (a respawn's body has none; it is left alone while there),
+    // taken once when the set comes off.
+    let resist = set.as_ref().map_or(0.0, |s| 1.0 - s.knockback_taken);
+    let had = before.as_ref().is_some_and(|s| s.knockback_taken < 1.0);
+    if let Some(body) = game.player.as_mut() {
+        if resist > 0.0 {
+            super::armory_lib_forge::give(body, KNOCKBACK, SET_KNOCKBACK, resist, Operation::AddValue);
+        } else if had {
+            super::armory_lib_forge::take(body, KNOCKBACK, SET_KNOCKBACK);
+        }
     }
     if let Some(set) = &set {
         if before.as_ref() != Some(set) || ticks % m::EFFECT_REFRESH_TICKS == 0 {
@@ -111,21 +128,41 @@ fn set_now(set: Option<std::sync::Arc<m::SetDef>>) -> Option<std::sync::Arc<m::S
     set.filter(|s| m::mod_on(&s.mod_id) && m::switch_on_now(&s.mod_id, s.setting.as_deref()))
 }
 
-/// `native_living_incoming_damage_v3` (no game: the hit is in progress), for a player victim
-/// (`victim_uuid`): a set may take no fall damage, or a share of an explosion's.
+/// `native_living_incoming_damage` (no game: the hit is in progress), which unlike `_v2` and
+/// `_v3` runs without a trait mod. A hit of a player's attack in progress: its weapon's rule
+/// multiplies a mob's damage (a backstab only on the mob aimed at) and notes a splashing
+/// weapon's hit; a sharpened weapon's bonus is added to each hit, a player's too. A player
+/// victim (by entity id): a set may take no fall damage, or a share of an explosion's.
 pub(super) fn on_incoming_damage(
-    victim_uuid: Option<u128>,
+    entity: i32,
+    kind: &str,
     damage_type: &str,
     amount: &mut f32,
     canceled: &mut bool,
 ) {
-    let Some(uuid) = victim_uuid else {
-        return;
-    };
     if *canceled {
         return;
     }
-    let Some(set) = set_now(m::with_wearer(uuid, |w| w.set.clone()).flatten()) else {
+    let player = kind == "minecraft:player";
+    if matches!(damage_type, "minecraft:player_attack" | "minecraft:mace_smash" | "minecraft:spear")
+        && let Some(attack) = m::attack_of(horizon_client::health::knockback_attacker())
+        && attack.attacker != entity
+    {
+        if !player {
+            *amount *= m::attack_multiplier(&attack, entity, kind);
+            if attack.weapon.as_ref().is_some_and(|w| w.splash_radius > 0.0)
+                && entity == attack.target
+                && let Ok(victim) = u32::try_from(entity)
+            {
+                m::note_hit(victim, *amount, attack.at);
+            }
+        }
+        *amount += attack.bonus;
+    }
+    if !player {
+        return;
+    }
+    let Some(set) = set_now(m::set_of_entity(entity)) else {
         return;
     };
     match m::incoming_damage(&set, damage_type) {
@@ -135,15 +172,11 @@ pub(super) fn on_incoming_damage(
     }
 }
 
-/// `native_living_knockback` (no game): a set may be pushed less far.
-pub(super) fn on_knockback(entity: i32, kind: &str, strength: &mut f64) {
-    if m::vanilla(kind) != "player" {
-        return;
-    }
-    if let Some(set) = set_now(m::set_of_entity(entity)) {
-        *strength *= set.knockback_taken;
-    }
-}
+/// The attribute and modifier a set's lighter knockback is given as: knockback resistance
+/// pushes the wearer less far, as `knockback_taken` did in the knockback hook, which runs only
+/// with a trait mod built in.
+const KNOCKBACK: &str = "minecraft:knockback_resistance";
+const SET_KNOCKBACK: &str = "armory_lib:set_knockback";
 
 /// `native_player_exp_change`: an experience orb the player picks up (kills, ores, and also
 /// smelting, breeding and fishing, which drop orbs too) is worth more with a set that says so.
@@ -596,44 +629,52 @@ fn grown_crop(game: &Game<'_>, at: [i32; 3]) -> Option<&'static m::Crop> {
 
 // ---- Weapon effects --------------------------------------------------------------------
 
-/// `native_living_incoming_damage_v2`: a player's weapon is about to hit the mob `entity`
-/// (melee, sweep or spear), with that player swapped in. A weapon's rule may make it hit
-/// harder from behind, against some mobs or in some dimension; a splashing weapon's hit is
-/// kept for its splash.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn on_weapon_hit(
-    game: &mut Game<'_>,
-    entity: i32,
-    kind: &str,
-    source_position: Option<[f64; 3]>,
-    victim_position: [f64; 3],
-    victim_view: [f64; 3],
-    weapon: Option<&ItemStack>,
-    amount: &mut f32,
-    canceled: &mut bool,
-) {
-    if *canceled {
-        return;
-    }
-    let Some(w) = weapon.and_then(|s| m::gear().weapon(&s.item)) else {
+/// `native_attack_entity`: a player's blow on `entity` (at `pos`) starts, with that player
+/// swapped in. The attack is noted with its weapon's rule, if in force, and whether the
+/// player stands behind the mob, for the damage hook to give its hits (the main one and a
+/// sweep's) the weapon's effects: harder from behind, against some mobs or in some dimension,
+/// and a splashing weapon's hit kept for its splash.
+pub(super) fn on_attack_entity(game: &mut Game<'_>, entity: i32, pos: [f64; 3], canceled: bool) {
+    // The id the attack's knockback scope names the attacker by.
+    let Some(attacker) = game.player.as_ref().map(|p| p.entity_id) else {
         return;
     };
-    if !on(game, &w.mod_id, w.setting.as_deref()) {
+    m::end_attack(attacker);
+    if canceled || !game.native_authoritative() {
         return;
     }
-    let attacker = source_position.or_else(|| game.native_acting_player().map(|p| p.position));
-    let from_behind = attacker.is_some_and(|a| m::behind(victim_position, victim_view, a));
-    *amount *= m::hit_multiplier(&w, kind, game.dim.id(), from_behind);
-    if w.splash_radius > 0.0
-        && let Ok(victim) = u32::try_from(entity)
-    {
-        m::note_hit(victim, *amount, victim_position);
-    }
+    let weapon = game
+        .native_equipment(EquipmentSlot::MainHand)
+        .and_then(|s| m::gear().weapon(&s.item))
+        .filter(|w| on(game, &w.mod_id, w.setting.as_deref()));
+    let mob = u32::try_from(entity)
+        .ok()
+        .and_then(|id| game.mobs.iter().find(|mob| mob.id == id));
+    let at = mob.map_or(pos, |mob| [mob.position.x, mob.position.y, mob.position.z]);
+    let from_behind = match (mob, game.native_acting_player()) {
+        (Some(mob), Some(me)) => {
+            m::behind(at, super::view_vector(mob.head_yaw, mob.head_pitch), me.position)
+        }
+        _ => false,
+    };
+    m::start_attack(m::Attack {
+        attacker,
+        target: entity,
+        at,
+        from_behind,
+        dimension: game.dim.id().to_owned(),
+        weapon,
+        bonus: 0.0,
+    });
 }
 
-/// `native_hurt_enemy`: the player's hit with `stack` landed on the mob `entity`. A burning
-/// weapon sets it alight; a splash is queued for the player's tick.
+/// `native_hurt_enemy`: the player's hit with `stack` landed on the mob `entity`, its sweep
+/// done: the attack is over. A burning weapon sets it alight; a splash is queued for the
+/// player's tick.
 pub(super) fn on_hurt_enemy(game: &mut Game<'_>, stack: &ItemStack, entity: u32) {
+    if let Some(body) = game.player.as_ref() {
+        m::end_attack(body.entity_id);
+    }
     let Some(w) = m::gear().weapon(&stack.item) else {
         return;
     };

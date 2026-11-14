@@ -199,9 +199,8 @@ helper = "sunburn.rs"
 bindings = [{ name = "mob", ty = "&crate::mobs::Mob", value = "&*m" }]
 
 # Each player's tick (with that player swapped in): carried-item effects and the effects of
-# hits taken, a set's effects and healing, weapon splashes. The incoming damage: fire-proof
-# creatures, the hits that give effects, set bonuses against falls and explosions. A set's
-# knockback and experience.
+# hits taken, a set's effects, healing and knockback resistance (the knockback hook runs only
+# with a trait mod), weapon splashes. A set's experience.
 [[injection]]
 id = "player_tick"
 kind = "HEAD"
@@ -211,32 +210,22 @@ bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
 ]
 
+# Every hit, through the game's first damage hook (`_v2` and `_v3` run only with a trait mod
+# built in; a plain mixin build has none): fire-proof creatures, the hits that give effects, a
+# player's attack's weapon effects and sharpened bonus, set cuts against falls and explosions,
+# warded. Players are named by entity id there.
 [[injection]]
 id = "incoming_damage"
 kind = "HEAD"
-target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v3"
+target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage"
 helper = "incoming_damage.rs"
-bindings = [
-  { name = "victim", ty = "u32", value = "victim" },
-  { name = "victim_uuid", ty = "Option<u128>", value = "victim_uuid" },
-  { name = "kind", ty = "&str", value = "kind" },
-  { name = "attacker", ty = "Option<u32>", value = "attacker" },
-  { name = "attacker_uuid", ty = "Option<u128>", value = "attacker_uuid" },
-  { name = "direct", ty = "Option<u32>", value = "direct" },
-  { name = "damage_type", ty = "&str", value = "damage_type" },
-  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
-  { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },
-]
-
-[[injection]]
-id = "knockback"
-kind = "HEAD"
-target = "horizon_client::game::native_hooks::Game<'_>::native_living_knockback"
-helper = "knockback.rs"
 bindings = [
   { name = "entity", ty = "i32", value = "entity" },
   { name = "kind", ty = "&str", value = "kind" },
-  { name = "strength", ty = "&mut f64", value = "&mut *strength" },
+  { name = "damage_type", ty = "&str", value = "damage_type" },
+  { name = "causing", ty = "i32", value = "causing" },
+  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
 ]
 
 [[injection]]
@@ -276,22 +265,18 @@ bindings = [
   { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
 ]
 
-# Weapon effects: damage bonuses before a player's weapon hit, fire and splashes once it
-# landed, healing and heads on a kill, the heads in the mob's loot.
+# Weapon effects: where a player's blow starts (the weapon, the target, behind it or not, a
+# sharpened bonus, for the damage hook to apply to its hits), fire and splashes once it landed,
+# healing and heads on a kill, the heads in the mob's loot.
 [[injection]]
-id = "weapon_hit"
+id = "attack_entity"
 kind = "HEAD"
-target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v2"
-helper = "weapon_hit.rs"
+target = "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
+helper = "attack_entity.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "entity", ty = "i32", value = "entity" },
-  { name = "kind", ty = "&str", value = "kind" },
-  { name = "source_position", ty = "Option<[f64; 3]>", value = "source_position" },
-  { name = "victim_position", ty = "[f64; 3]", value = "victim_position" },
-  { name = "victim_view", ty = "[f64; 3]", value = "victim_view" },
-  { name = "weapon", ty = "Option<&horizon_client::items::ItemStack>", value = "weapon" },
-  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
+  { name = "pos", ty = "[f64; 3]", value = "pos" },
   { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
 ]
 
@@ -724,10 +709,9 @@ bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
 ]
 
-# The upgrades: swift's modifiers, warded and sharpened noted each player tick; warded and
-# sharpened (between players) on the damage a player takes; sharpened on a weapon hit on a mob;
-# reinforced on an item's wear; soulbound on a dying player's drops; radiant's light and the
-# tooltip lines on the client.
+# The upgrades: swift's modifiers and warded noted each player tick (warded and sharpened act
+# in the damage and attack hooks above); reinforced on an item's wear; soulbound on a dying
+# player's drops; radiant's light and the tooltip lines on the client.
 [[injection]]
 id = "forge_player_tick"
 kind = "HEAD"
@@ -735,31 +719,6 @@ target = "horizon_client::game::native_hooks::Game<'_>::native_player_tick"
 helper = "forge_player_tick.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
-]
-
-[[injection]]
-id = "forge_incoming_damage"
-kind = "HEAD"
-target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v3"
-helper = "forge_incoming_damage.rs"
-bindings = [
-  { name = "victim_uuid", ty = "Option<u128>", value = "victim_uuid" },
-  { name = "attacker_uuid", ty = "Option<u128>", value = "attacker_uuid" },
-  { name = "damage_type", ty = "&str", value = "damage_type" },
-  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
-  { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },
-]
-
-[[injection]]
-id = "forge_weapon_hit"
-kind = "HEAD"
-target = "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v2"
-helper = "forge_weapon_hit.rs"
-bindings = [
-  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
-  { name = "weapon", ty = "Option<&horizon_client::items::ItemStack>", value = "weapon" },
-  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
-  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
 ]
 
 [[injection]]
