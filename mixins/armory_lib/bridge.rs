@@ -12,6 +12,42 @@
 // It is also a test target of the repository's Cargo package: `cargo test` runs it alone.
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
+/// Shared by gameplay resource loading and the client library's mob constructor.
+#[derive(Clone, Debug)]
+pub struct CreatureRule {
+    pub mod_id: String,
+    pub kind: String,
+    pub behavior: Option<String>,
+    pub dimensions: Option<[f64; 2]>,
+    pub fire_proof: bool,
+}
+static CREATURE_RULES: Mutex<Vec<CreatureRule>> = Mutex::new(Vec::new());
+pub fn clear_creature_rules() { lock(&CREATURE_RULES).clear(); }
+pub fn creature_rule(kind: &str) -> Option<CreatureRule> {
+    lock(&CREATURE_RULES).iter().find(|rule| rule.kind == kind).cloned()
+}
+pub fn read_creature_rules(mod_id: &str, file: &serde_json::Value) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut rules = lock(&CREATURE_RULES);
+    rules.retain(|r| r.mod_id != mod_id);
+    if let Some(entries) = file.get("mob_rules").and_then(|v| v.as_array()) {
+        for value in entries {
+            let Some(behavior) = value.get("behavior").and_then(|v| v.as_str()) else { continue; };
+            let Some(kind) = value.get("kind").and_then(|v| v.as_str()) else { continue; };
+            if !["hunter", "neutral", "flying"].contains(&behavior) {
+                problems.push(format!("{mod_id}: unknown creature behavior {behavior}")); continue;
+            }
+            let dimensions = value.get("dimensions").and_then(|v| v.as_array()).and_then(|v| {
+                if v.len()!=2 { return None; }
+                let w=v[0].as_f64()?; let h=v[1].as_f64()?;
+                (w.is_finite() && h.is_finite() && (0.2..=4.0).contains(&w) && (0.2..=4.0).contains(&h)).then_some([w,h])
+            });
+            rules.push(CreatureRule { mod_id:mod_id.into(),kind:kind.into(),behavior:Some(behavior.into()),dimensions,fire_proof:value.get("fire_proof").and_then(|v|v.as_bool()).unwrap_or(false) });
+        }
+    }
+    problems
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }

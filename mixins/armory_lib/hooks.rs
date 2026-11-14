@@ -160,6 +160,7 @@ fn ensure_loaded(host: &dyn Host) {
 }
 
 fn load(host: &dyn Host) {
+    bridge::clear_creature_rules();
     let mut files = Registry::default();
     let mut gear = bridge::Gear::default();
     let mut problems = Vec::new();
@@ -167,14 +168,31 @@ fn load(host: &dyn Host) {
         let Some(bytes) = host.data(&format!("data/{id}/armory_lib.json")) else {
             continue;
         };
-        let file: serde_json::Value = match serde_json::from_slice(&bytes) {
+        let mut file: serde_json::Value = match serde_json::from_slice(&bytes) {
             Ok(file) => file,
             Err(e) => {
                 problems.push(format!("{id}: armory_lib.json is not JSON: {e}"));
                 continue;
             }
         };
+        // External models stay under their owning mod's data directory.
+        if let Some(looks) = file.get_mut("mob_looks").and_then(|v| v.as_array_mut()) {
+            for look in looks {
+                if let Some(path) = look.get("model").and_then(|v| v.as_str()).map(str::to_owned) {
+                    let prefix = format!("data/{id}/models/");
+                    if !path.starts_with(&prefix) || path.contains("..") || path.contains('\\') {
+                        problems.push(format!("{id}: invalid custom model path {path}"));
+                        continue;
+                    }
+                    let model = host.data(&path).filter(|bytes| bytes.len() <= 8*1024*1024)
+                        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+                    if let Some(model) = model { look["model"] = model; }
+                    else { problems.push(format!("{id}: cannot read custom model {path}")); }
+                }
+            }
+        }
         let declared = logic::read_file(&id, &file);
+        problems.extend(bridge::read_creature_rules(&id, &file));
         if !declared.usable {
             problems.extend(declared.problems);
             continue;
@@ -335,8 +353,8 @@ impl Lib {
         let mob = event.mob;
         let mut models = lock(&self.models);
         let model = models
-            .entry(look.rig.layer.clone())
-            .or_insert_with(|| host.bake_layer(&look.rig.layer));
+            .entry(if look.geometry.is_some() { format!("{}:{}",look.mod_id,look.kind) } else { look.rig.layer.clone() })
+            .or_insert_with(|| if look.geometry.is_some() { Some(mesh_render::empty()) } else { host.bake_layer(&look.rig.layer) });
         let Some(model) = model.as_mut() else {
             return false;
         };
@@ -348,6 +366,7 @@ impl Lib {
             walk_speed: mob.walk_speed,
         };
         model.reset_all_poses();
+        if let Some(animation) = &look.geometry { mesh_render::pose(model, animation, mob.age, mob.walk_speed.abs() > 0.01); }
         for (name, motion) in &look.rig.parts {
             if let Some(part) = find(model, name) {
                 let [x, y, z] = logic::pose(*motion, &frame, name.starts_with("right"));
@@ -373,7 +392,13 @@ impl Lib {
             // The glowing pixels again, a hair larger so they sit over the body, fully lit.
             let light = draw.light;
             draw.light = 0xF0F0;
-            grow(model, 1.004);
+            if look.geometry.is_some() {
+                for polygon in &mut model.polygons {
+                    for vertex in &mut polygon.vertices {
+                        for axis in 0..3 { vertex.pos[axis] += polygon.normal[axis] * 0.01; }
+                    }
+                }
+            } else { grow(model, 1.004); }
             host.draw_model_part(draw, model, emissive, 0xFFFFFF);
             draw.light = light;
         }
@@ -801,4 +826,39 @@ pub(crate) fn on_player_tick(host: &mut dyn Host) {
     if lib_on(host) {
         lib().player_tick(host, &mut PlayerTickEvent {});
     }
+}
+
+mod mesh_render {
+//! Updates a reusable model buffer from interpolated geometry; no mesh allocation per frame.
+use crate::mod_api::{ModelPart, ModelPolygon, ModelVertex, PartPose};
+use super::logic::mesh::Animation;
+
+pub fn empty() -> ModelPart { ModelPart::new(Vec::new(), Vec::new(), PartPose::ZERO) }
+
+pub fn pose(model: &mut ModelPart, animation: &Animation, age: f32, moving: bool) {
+    let (a,b,alpha) = animation.sample(age,moving);
+    let frames = &animation.frames;
+    // Preview vertices are converted to Y-down when exported: reverse winding.
+    const FACES: [[usize;4];6] = [[0,1,3,2],[4,6,7,5],[0,4,5,1],[2,3,7,6],[0,2,6,4],[1,5,7,3]];
+    let empty_vertex = ModelVertex { pos:[0.0;3],u:0.0,v:0.0 };
+    model.polygons.resize(frames[a].len()*6,ModelPolygon { vertices:[empty_vertex;4],normal:[0.0;3] });
+    let tiles = animation.texture_size / animation.tile_size;
+    let size = animation.texture_size as f32;
+    for (i,(left,right)) in frames[a].iter().zip(&frames[b]).enumerate() {
+        let points: [[f32;3];8] = std::array::from_fn(|j| std::array::from_fn(|k| left.vertices[j][k]+(right.vertices[j][k]-left.vertices[j][k])*alpha));
+        let x = (left.tile % tiles * animation.tile_size) as f32;
+        let y = (left.tile / tiles * animation.tile_size) as f32;
+        let end = animation.tile_size as f32 - 0.5;
+        let uv = [[x+0.5,y+0.5],[x+end,y+0.5],[x+end,y+end],[x+0.5,y+end]];
+        for (f,indices) in FACES.iter().enumerate() {
+            let vertices = std::array::from_fn(|j| ModelVertex { pos:points[indices[j]],u:uv[j][0]/size,v:uv[j][1]/size });
+            let u: [f32;3] = std::array::from_fn(|k| vertices[1].pos[k]-vertices[0].pos[k]);
+            let v: [f32;3] = std::array::from_fn(|k| vertices[2].pos[k]-vertices[0].pos[k]);
+            let n = [u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+            let length = (n.iter().map(|x| x*x).sum::<f32>()).sqrt().max(0.0001);
+            model.polygons[i*6+f] = ModelPolygon { vertices,normal:n.map(|x| x/length) };
+        }
+    }
+}
+
 }

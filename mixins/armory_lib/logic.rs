@@ -3,7 +3,7 @@
 
 pub const ID: &str = "armory_lib";
 pub const NAME: &str = "Armory Lib";
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = "0.1.0-creatures.1";
 
 // ---------------------------------------------------------------------------------------
 // Coloured gear light
@@ -257,6 +257,7 @@ impl Rig {
 /// The look of one entity type.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MobLook {
+    pub geometry: Option<std::sync::Arc<mesh::Animation>>,
     /// The mod that owns it: while that mod is off the mob is drawn as its template.
     pub mod_id: String,
     /// The entity type, `mymod:shade`.
@@ -273,6 +274,7 @@ pub struct MobLook {
 impl MobLook {
     pub fn new(mod_id: &str, kind: &str, rig: Rig, texture: &str) -> Self {
         Self {
+            geometry: None,
             mod_id: mod_id.into(),
             kind: kind.into(),
             rig,
@@ -617,12 +619,19 @@ fn read_look(
         "humanoid" => Rig::humanoid(),
         "wolf" => Rig::wolf(),
         "chicken" => Rig::chicken(),
+        "custom" if look.get("model").is_some_and(|v| v.is_object()) => Rig::custom("custom", &[]),
         other => {
             problems.push(format!("{mod_id}: unknown rig {other:?} for {kind}"));
             return None;
         }
     };
     let mut made = MobLook::new(mod_id, kind, rig, &texture);
+    if let Some(value) = look.get("model") {
+        match mesh::Animation::read(value) {
+            Ok(model) => made.geometry = Some(std::sync::Arc::new(model)),
+            Err(error) => { problems.push(format!("{mod_id}: {kind}: {error}")); return None; }
+        }
+    }
     made.emissive = text(look, "emissive");
     made.scale = look.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0).clamp(0.1, 8.0) as f32;
     Some(made)
@@ -1007,4 +1016,84 @@ mod tests {
         let problems = read_file("mod", &file).problems;
         assert!(problems.is_empty(), "{problems:#?}");
     }
+}
+
+pub mod mesh {
+//! Bounded, data-authored animated cuboids. Coordinates are model texels (+Y down).
+use serde_json::Value;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cube {
+    pub vertices: [[f32; 3]; 8],
+    pub tile: usize,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Animation {
+    pub frames: Vec<Vec<Cube>>,
+    pub fps: f32,
+    pub texture_size: usize,
+    pub tile_size: usize,
+    pub animate_idle: bool,
+}
+
+impl Animation {
+    pub fn read(v: &Value) -> Result<Self, String> {
+        let fail = || "invalid custom model: expected 1..96 matching frames, 1..192 cuboids, finite bounded vertices and valid atlas tiles".to_owned();
+        if v.get("format").and_then(Value::as_u64) != Some(1) { return Err(fail()); }
+        let size = v.get("texture_size").and_then(Value::as_u64).filter(|n| [64,128,256,512].contains(n)).ok_or_else(fail)? as usize;
+        let tile_size = v.get("tile_size").and_then(Value::as_u64).filter(|n| [4,8,16].contains(n)).ok_or_else(fail)? as usize;
+        let fps = v.get("fps").and_then(Value::as_f64).filter(|n| n.is_finite() && (1.0..=60.0).contains(n)).ok_or_else(fail)? as f32;
+        let source = v.get("frames").and_then(Value::as_array).filter(|a| !a.is_empty() && a.len() <= 96).ok_or_else(fail)?;
+        let mut frames = Vec::with_capacity(source.len());
+        let mut count = None;
+        for frame in source {
+            let cubes = frame.as_array().filter(|a| !a.is_empty() && a.len() <= 192).ok_or_else(fail)?;
+            if count.is_some_and(|n| n != cubes.len()) { return Err(fail()); }
+            count = Some(cubes.len());
+            let mut made = Vec::with_capacity(cubes.len());
+            for cube in cubes {
+                let tile = cube.get("tile").and_then(Value::as_u64).filter(|n| *n < ((size / tile_size).pow(2)) as u64).ok_or_else(fail)? as usize;
+                let vertices = cube.get("vertices").and_then(Value::as_array).filter(|a| a.len() == 8).ok_or_else(fail)?;
+                let mut points = [[0.0;3];8];
+                for (i, vertex) in vertices.iter().enumerate() {
+                    let axes = vertex.as_array().filter(|a| a.len() == 3).ok_or_else(fail)?;
+                    for (j, axis) in axes.iter().enumerate() {
+                        points[i][j] = axis.as_f64().filter(|n| n.is_finite() && n.abs() <= 256.0).ok_or_else(fail)? as f32;
+                    }
+                }
+                made.push(Cube { vertices: points, tile });
+            }
+            frames.push(made);
+        }
+        Ok(Self { frames, fps, texture_size: size, tile_size, animate_idle: v.get("animate_idle").and_then(Value::as_bool).unwrap_or(false) })
+    }
+
+    pub fn sample(&self, age: f32, moving: bool) -> (usize, usize, f32) {
+        let t = if age.is_finite() && (moving || self.animate_idle) { age.max(0.0) * self.fps / 20.0 } else { 0.0 };
+        let frame = t.rem_euclid(self.frames.len() as f32);
+        let a = frame.floor() as usize;
+        (a, (a + 1) % self.frames.len(), frame.fract())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn valid() -> Value { serde_json::json!({"format":1,"texture_size":64,"tile_size":4,"fps":12,"frames":[[{"tile":0,"vertices":[[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1]]}]]}) }
+    #[test] fn rejects_malformed_and_oversized_models() {
+        let mut v=valid(); assert!(Animation::read(&v).is_ok());
+        v["frames"][0][0]["vertices"][0][0]=serde_json::json!(10000); assert!(Animation::read(&v).is_err());
+        let mut v=valid(); v["frames"][0][0]["tile"]=serde_json::json!(256); assert!(Animation::read(&v).is_err());
+        let mut v=valid(); v["frames"]=serde_json::json!([]); assert!(Animation::read(&v).is_err());
+        let mut v=valid(); v["frames"].as_array_mut().unwrap().push(serde_json::json!([])); assert!(Animation::read(&v).is_err());
+    }
+    #[test] fn loops_interpolates_and_stops_grounded_idle() {
+        let mut a=Animation::read(&valid()).unwrap(); a.frames.push(a.frames[0].clone());
+        assert_eq!(a.sample(2.5,true),(1,0,0.5));
+        assert_eq!(a.sample(2.5,false),(0,1,0.0));
+        a.animate_idle=true; assert_eq!(a.sample(2.5,false),(1,0,0.5));
+        assert_eq!(a.sample(f32::NAN,true),(0,1,0.0));
+    }
+}
+
 }
