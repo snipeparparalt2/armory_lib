@@ -544,12 +544,12 @@ pub(super) fn on_world_saved(game: &mut Game<'_>) {
 
 // ---- The upgrades at work ----------------------------------------------------------------
 
-/// What a player's upgrades do where no game is at hand (the damage hook): the share of damage
-/// that reaches them, their main hand's extra damage, and when their tick last ran. Also the
-/// swift modifiers put on them.
+/// What a player's upgrades do where no game is at hand (the damage hook): their entity id,
+/// the share of damage that reaches them, and when their tick last ran. Also the swift
+/// modifiers put on them.
 struct Worn {
+    entity: i32,
     taken: f32,
-    bonus: f32,
     seen: Instant,
     swift: (bool, bool),
 }
@@ -557,8 +557,7 @@ struct Worn {
 static WORN: Mutex<BTreeMap<u128, Worn>> = Mutex::new(BTreeMap::new());
 
 /// `native_player_tick`, the player swapped in: items owed from a crash are given back; swift's
-/// modifiers follow the main hand; warded pieces and a sharpened main hand are noted for the
-/// damage hook.
+/// modifiers follow the main hand; warded pieces are noted for the damage hook.
 pub(super) fn on_player_tick(game: &mut Game<'_>) {
     if !game.native_authoritative() {
         return;
@@ -571,7 +570,6 @@ pub(super) fn on_player_tick(game: &mut Game<'_>) {
     let def = in_force(game, &forges);
     let main = game.native_equipment(EquipmentSlot::MainHand);
     let mut taken = 1.0;
-    let mut bonus = 0.0;
     let mut swift = (false, false);
     if let Some(def) = def {
         let worn = [EquipmentSlot::Head, EquipmentSlot::Chest, EquipmentSlot::Legs, EquipmentSlot::Feet]
@@ -580,28 +578,27 @@ pub(super) fn on_player_tick(game: &mut Game<'_>) {
             .filter(|s| has(s, f::Upgrade::Warded))
             .count();
         taken = f::warded_share(worn, def.amount(f::Upgrade::Warded));
-        if let Some(main) = &main {
-            if has(main, f::Upgrade::Sharpened) {
-                bonus = def.amount(f::Upgrade::Sharpened);
-            }
-            if has(main, f::Upgrade::Swift) {
-                let kinds = kinds_of(game, def, main);
-                swift = (kinds.contains(&f::Kind::Weapons), kinds.contains(&f::Kind::Tools));
-            }
+        if let Some(main) = &main
+            && has(main, f::Upgrade::Swift)
+        {
+            let kinds = kinds_of(game, def, main);
+            swift = (kinds.contains(&f::Kind::Weapons), kinds.contains(&f::Kind::Tools));
         }
     }
+    // The id the damage hook names them by as a victim.
+    let entity = game.native_acting_player().map_or(0, |p| p.entity_id);
     let before = {
         let mut all = lock(&WORN);
         if all.len() > 256 {
             all.retain(|u, w| *u == uuid || w.seen.elapsed() < FRESH * 30);
         }
         let w = all.entry(uuid).or_insert(Worn {
+            entity,
             taken: 1.0,
-            bonus: 0.0,
             seen: Instant::now(),
             swift: (false, false),
         });
-        (w.taken, w.bonus, w.seen) = (taken, bonus, Instant::now());
+        (w.entity, w.taken, w.seen) = (entity, taken, Instant::now());
         std::mem::replace(&mut w.swift, swift)
     };
     if swift == (false, false) && before == swift {
@@ -625,8 +622,9 @@ pub(super) fn on_player_tick(game: &mut Game<'_>) {
 }
 
 /// Puts a transient modifier on the player's `attribute`, as `/attribute .. modifier add` does,
-/// so their client hears it; left alone while it is there as it should be.
-fn give(body: &mut PlayerMotion, attribute: &str, id: &str, amount: f64, op: Operation) {
+/// so their client hears it; left alone while it is there as it should be. (Also the gear's
+/// set knockback.)
+pub(super) fn give(body: &mut PlayerMotion, attribute: &str, id: &str, amount: f64, op: Operation) {
     let Some(key) = body.attributes.key(attribute) else {
         return;
     };
@@ -650,7 +648,7 @@ fn give(body: &mut PlayerMotion, attribute: &str, id: &str, amount: f64, op: Ope
     });
 }
 
-fn take(body: &mut PlayerMotion, attribute: &str, id: &str) {
+pub(super) fn take(body: &mut PlayerMotion, attribute: &str, id: &str) {
     let Some(key) = body.attributes.key(attribute) else {
         return;
     };
@@ -675,44 +673,44 @@ fn give_owed(game: &mut Game<'_>, uuid: u128) {
     }
 }
 
-/// `native_living_incoming_damage_v3` (no game): a player wearing warded pieces takes less; a
-/// player's blow with a sharpened weapon on another player does more (mobs get it from the
-/// weapon hit hook).
+/// `native_living_incoming_damage` (no game; it runs without a trait mod, unlike `_v3`): a
+/// player (`entity`, by entity id) wearing warded pieces takes less. A sharpened weapon's extra
+/// damage is the attack's (`on_attack_entity`), which the gear's part of this hook adds.
 pub(super) fn on_incoming_damage(
-    victim_uuid: Option<u128>,
-    attacker_uuid: Option<u128>,
+    entity: i32,
+    kind: &str,
     damage_type: &str,
     amount: &mut f32,
     cancel: &mut bool,
 ) {
-    if *cancel || *amount <= 0.0 {
-        return;
-    }
-    let Some(victim) = victim_uuid else {
-        return;
-    };
-    let all = lock(&WORN);
-    let fresh = |uuid: u128| all.get(&uuid).filter(|w| w.seen.elapsed() < FRESH);
-    if damage_type == "minecraft:player_attack"
-        && let Some(w) = attacker_uuid.and_then(fresh)
-    {
-        *amount += w.bonus;
-    }
     // Like Protection, warding doesn't hold off the void or /kill.
-    if !matches!(damage_type, "minecraft:out_of_world" | "minecraft:generic_kill")
-        && let Some(w) = fresh(victim)
+    if *cancel
+        || *amount <= 0.0
+        || kind != "minecraft:player"
+        || matches!(damage_type, "minecraft:out_of_world" | "minecraft:generic_kill")
     {
+        return;
+    }
+    let all = lock(&WORN);
+    if let Some(w) = all.values().find(|w| w.entity == entity && w.seen.elapsed() < FRESH) {
         *amount *= w.taken;
     }
 }
 
-/// `native_living_incoming_damage_v2`: a player's weapon hit on a mob, with a sharpened weapon.
-pub(super) fn on_weapon_hit(game: &mut Game<'_>, weapon: Option<&ItemStack>, amount: &mut f32, canceled: &mut bool) {
-    if *canceled || !weapon.is_some_and(|w| has(w, f::Upgrade::Sharpened)) {
+/// `native_attack_entity`, the player swapped in: their blow starts. With a sharpened weapon in
+/// the main hand each of its hits (the target, a sweep's others, a player) does more.
+pub(super) fn on_attack_entity(game: &Game<'_>) {
+    let Some(attacker) = game.player.as_ref().map(|p| p.entity_id) else {
+        return;
+    };
+    if !game
+        .native_equipment(EquipmentSlot::MainHand)
+        .is_some_and(|w| has(&w, f::Upgrade::Sharpened))
+    {
         return;
     }
     if let Some(def) = in_force(game, &f::forges()) {
-        *amount += def.amount(f::Upgrade::Sharpened);
+        horizon_client::armory_lib_bridge::add_attack_bonus(attacker, def.amount(f::Upgrade::Sharpened));
     }
 }
 

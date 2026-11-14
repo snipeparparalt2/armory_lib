@@ -310,10 +310,13 @@ it is (a trait mod would make it generate its own executable, which newer launch
 newer Horizon). It adds `armory_lib_bridge` to the client library and its other modules to the
 game, and hooks the head of the game's own catalog hook functions: `native_mods`,
 `native_settings`, `native_settings_click`, `native_visuals`, `native_mob_submit`,
-`native_living_conversion_pre`, `native_living_incoming_damage_v3`, `native_player_tick`,
-`native_server_data_loaded`, `native_client_resources_reloaded` with the game as `Host`, and more
-for the gear, companions, trinkets, backpacks, soul jars and waystones (item use, block clicks,
-kills, server menus, commands, keys, world saves, the item bar and tooltip among them). In the client library it adds `armory_lib_goals`, hooks the start of
+`native_living_conversion_pre`, `native_player_tick`, `native_server_data_loaded`,
+`native_client_resources_reloaded` with the game as `Host`, and more for the gear, companions,
+trinkets, backpacks, soul jars and waystones (item use, block clicks, kills, server menus,
+commands, keys, world saves, the item bar and tooltip among them). Damage goes through
+`native_living_incoming_damage` and a player's blow starts at `native_attack_entity`: the
+`_v2` and `_v3` damage hooks and `native_living_knockback` run only when a trait mod is built
+in, which a plain bundle never is, so the library doesn't use them. In the client library it adds `armory_lib_goals`, hooks the start of
 `mobs::ai::burn_undead` for `no_sunburn` and of `mobs::ai::native_register_goals` for companions
 and sounds, and the return of `Mob::voice_pitch`. It reads the game's state directly, so the
 library is pinned to one Horizon commit.

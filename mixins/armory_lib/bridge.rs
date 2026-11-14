@@ -1162,6 +1162,56 @@ pub fn take_splashes(attacker: u128) -> Vec<Splash> {
     mine
 }
 
+/// A player's attack in progress, from where it starts (`native_attack_entity`, with a game)
+/// until its weapon hit landed or the player's next tick: the damage hook, which has no game,
+/// gives its hits the weapon's effects. (The weapon hit hook `_v2` would, but runs only with a
+/// trait mod built in.)
+#[derive(Clone, Debug)]
+pub struct Attack {
+    /// The attacker's entity id, as the attack's knockback scope names it.
+    pub attacker: i32,
+    /// The entity aimed at, where it stood, and whether the attacker stood behind it.
+    pub target: i32,
+    pub at: [f64; 3],
+    pub from_behind: bool,
+    pub dimension: String,
+    /// The weapon's rule, when one is in force.
+    pub weapon: Option<Arc<WeaponDef>>,
+    /// Damage added to each of its hits (a sharpened weapon).
+    pub bonus: f32,
+}
+
+static ATTACKS: Mutex<Vec<Attack>> = Mutex::new(Vec::new());
+
+pub fn start_attack(attack: Attack) {
+    let mut all = lock(&ATTACKS);
+    all.retain(|a| a.attacker != attack.attacker);
+    push_capped(&mut all, attack);
+}
+
+/// Adds `bonus` to the damage of each hit of `attacker`'s attack in progress.
+pub fn add_attack_bonus(attacker: i32, bonus: f32) {
+    if let Some(a) = lock(&ATTACKS).iter_mut().find(|a| a.attacker == attacker) {
+        a.bonus += bonus;
+    }
+}
+
+pub fn attack_of(attacker: i32) -> Option<Attack> {
+    lock(&ATTACKS).iter().find(|a| a.attacker == attacker && attacker != 0).cloned()
+}
+
+pub fn end_attack(attacker: i32) {
+    lock(&ATTACKS).retain(|a| a.attacker != attacker);
+}
+
+/// What a hit of `attack` on `victim` (a mob of type `kind`) is multiplied by: a backstab only
+/// on the entity aimed at (a sweep's others are hit from no particular side).
+pub fn attack_multiplier(attack: &Attack, victim: i32, kind: &str) -> f32 {
+    attack.weapon.as_deref().map_or(1.0, |w| {
+        hit_multiplier(w, kind, &attack.dimension, attack.from_behind && victim == attack.target)
+    })
+}
+
 /// Whether a mob standing at `at` is caught by a splash of `radius` blocks around `center`.
 pub fn in_splash(center: [f64; 3], radius: f64, at: [f64; 3]) -> bool {
     let d2: f64 = (0..3).map(|i| (at[i] - center[i]).powi(2)).sum();
@@ -1541,6 +1591,35 @@ mod tests {
         assert!(w("m:scythe").heads && !w("m:dagger").heads);
         assert_eq!(head_of("minecraft:wither_skeleton"), Some(("minecraft:wither_skeleton_skull", 0.05)));
         assert_eq!(head_of("minecraft:spider"), None);
+    }
+
+    #[test]
+    fn an_attack_gives_its_hits_the_weapon_s_effects() {
+        let (gear, _) = gear_of_file();
+        let attack = |weapon: &str| Attack {
+            attacker: 7,
+            target: 40,
+            at: [0.0; 3],
+            from_behind: true,
+            dimension: "minecraft:overworld".into(),
+            weapon: gear.weapon(weapon),
+            bonus: 0.0,
+        };
+        // The backstab is for the target only; a sweep's others get the kind bonus alone.
+        assert_eq!(attack_multiplier(&attack("m:dagger"), 40, "minecraft:zombie"), 2.0);
+        assert_eq!(attack_multiplier(&attack("m:dagger"), 41, "minecraft:zombie"), 1.0);
+        assert_eq!(attack_multiplier(&attack("m:pig"), 41, "minecraft:piglin"), 1.5);
+        assert_eq!(attack_multiplier(&attack("m:none"), 40, "minecraft:zombie"), 1.0);
+        start_attack(attack("m:dagger"));
+        add_attack_bonus(7, 2.0);
+        add_attack_bonus(8, 5.0);
+        assert_eq!(attack_of(7).map(|a| a.bonus), Some(2.0));
+        assert!(attack_of(8).is_none() && attack_of(0).is_none());
+        // A new attack replaces the last; the end of one leaves nothing behind.
+        start_attack(attack("m:pig"));
+        assert_eq!(attack_of(7).map(|a| a.bonus), Some(0.0));
+        end_attack(7);
+        assert!(attack_of(7).is_none());
     }
 
     #[test]
