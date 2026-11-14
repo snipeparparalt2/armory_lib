@@ -37,6 +37,10 @@ path = "mixins/armory_lib/trinkets_logic.rs"
 # ---- Batch C: creatures and bosses ----
 
 # ---- Batch C: citadel, door and map scrap ----
+# Sealed doors and structure finders: their sections, a gate's blocks, the finder's words.
+[[test]]
+name = "citadel"
+path = "mixins/armory_lib/citadel_logic.rs"
 
 [dependencies]
 serde_json = "1"

@@ -291,6 +291,32 @@ sounds are declared in the file only.
 - **Your page replaces your content mod's own row** in Options > Mods, so players see one row for
   your mod, with its switches. Turning that row off turns your mod off, as before.
 
+### Sealed doors and structure finders
+
+```json
+{
+  "sealed_doors": [
+    {"blocks": ["mymod:sealed_door"], "key": "mymod:vault_key", "max_blocks": 64,
+     "sound": "minecraft:block.vault.open_shutter", "locked": "Sealed. Find the key"}
+  ],
+  "structure_finders": [
+    {"items": ["mymod:old_map"], "structure": "mymod:keep", "name": "The keep", "radius": 32,
+     "cooldown_seconds": 3, "not_found": "The markings lead nowhere you can reach"}
+  ]
+}
+```
+
+- **A sealed door** is a block the player can't open but with its key: a right click with the
+  key in hand uses the key up (not in creative) and turns every door block joined face to face to
+  the one clicked into air, up to `max_blocks` (64, at most 256), with `sound` (a vanilla sound
+  event) and soul flames. A click with anything else shows `locked` on the action bar and goes on
+  as usual. Make the block unbreakable (`"hardness": -1`) so the key is the only way through.
+- **A structure finder** is an item whose right click tells the player where the nearest start of
+  `structure` is, as `/locate structure` finds it in the level they are in: "The keep lies about
+  1,200 blocks north-east" (distance rounded, eight compass points), or `not_found` when there is
+  none within `radius` placement cells of the structure's set (32; `/locate` uses 100). The item
+  is kept and cools down `cooldown_seconds` (3), as a search builds the layouts it passes.
+
 ### Planned
 
 Not in 0.1.0: block menus and screens (a soul forge), a button for the trinket slots in the
