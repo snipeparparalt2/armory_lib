@@ -971,3 +971,41 @@ bindings = [
 ]
 
 # ---- Batch C: citadel, door and map scrap ----
+# `citadel.rs`: sealed doors (a key opens every door block of a gate) and structure finders (an
+# item that says the way to the nearest start of a structure), as `game::armory_lib_citadel`.
+# `citadel_logic.rs`: what the mods' files declare under `sealed_doors` and
+# `structure_finders`, a gate's blocks and the finder's words, with nothing from the game in it
+# (`cargo test` runs it as the `citadel` test).
+[[module]]
+id = "citadel_logic"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_citadel_logic"
+source = "citadel_logic.rs"
+
+[[module]]
+id = "citadel"
+file = "crates/horizon-client/src/game.rs"
+name = "armory_lib_citadel"
+source = "citadel.rs"
+
+[[injection]]
+id = "citadel_right_click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_right_click_block"
+helper = "citadel_right_click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "citadel_use_item"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_use_item"
+helper = "citadel_use_item.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]

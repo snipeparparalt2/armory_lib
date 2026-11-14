@@ -200,6 +200,7 @@ fn load(host: &dyn Host) {
         problems.extend(super::armory_lib_bosses_logic::read(&id, &file));
 
         // ---- Batch C: citadel, door and map scrap (read here) ----
+        problems.extend(super::armory_lib_citadel::read(&id, &file));
 
         files.lights.extend(declared.lights.into_iter().map(|l| (l.item.clone(), l)));
         files.looks.extend(declared.looks.into_iter().map(|l| (l.kind.clone(), l)));
