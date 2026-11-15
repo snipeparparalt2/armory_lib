@@ -1012,7 +1012,16 @@ mod tests {
             return;
         };
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-        let file: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let mut file: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+        // The game swaps a look's model path for the file it names (hooks.rs); the content root is
+        // three folders up from data/<mod id>/armory_lib.json.
+        let root = std::path::Path::new(&path).ancestors().nth(3).expect("a content root").to_owned();
+        for look in file["mob_looks"].as_array_mut().into_iter().flatten() {
+            if let Some(rel) = look.get("model").and_then(|v| v.as_str()).map(str::to_owned) {
+                let text = std::fs::read_to_string(root.join(&rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+                look["model"] = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{rel}: {e}"));
+            }
+        }
         let problems = read_file("mod", &file).problems;
         assert!(problems.is_empty(), "{problems:#?}");
     }
