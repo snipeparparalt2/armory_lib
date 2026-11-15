@@ -6,7 +6,7 @@
 # package, so the launcher builds the game as it is and needs no generated executable.
 [mod]
 id = "armory_lib"
-version = "0.1.0-creatures.1"
+version = "0.1.0"
 
 [compatibility]
 horizon_revision = "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca"

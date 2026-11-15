@@ -3,7 +3,7 @@
 
 pub const ID: &str = "armory_lib";
 pub const NAME: &str = "Armory Lib";
-pub const VERSION: &str = "0.1.0-creatures.1";
+pub const VERSION: &str = "0.1.0";
 
 // ---------------------------------------------------------------------------------------
 // Coloured gear light
